@@ -126,7 +126,7 @@ For Illumina 5-base or Watchmaker data processed with the 5CmC pipeline, start f
 
 - `input_dir` is the folder holding the per-sample 5CmC directories (the central
   `5CmC/<version>/<project>/` folder, or the folder you launched 5CmC from, which holds symlinks to them).
-  Each `<sample>_..._hg38_v1.0__5cmc-v1.1/mod_pileup.txt` is picked up, and its sample is named
+  Each `<sample>_..._hg19_wm_idt_spike_v1.0__5cmc-v1.1/mod_pileup.txt` is picked up, and its sample is named
   after the part before the CG-Align/5CmC suffix (`SampleABC`).
 - Rows where the sample's genotype isn't the reference C (`C/C` on `+`, `G/G` on `-`) are removed,
   because C>T SNPs look like methylation calls. Then both strands are summed per CpG, the same way

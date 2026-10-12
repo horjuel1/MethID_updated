@@ -84,7 +84,7 @@ def sampleIdFromFile(f, input_file_type) {
     }
     // 5CmC files are all named mod_pileup.txt, so take the sample id from the parent
     // directory and drop the 5CmC and CG-Align suffixes
-    // (e.g. SampleABC_bt2-bwa_umi_true_hg38_v1.0__5cmc-v1.1/mod_pileup.txt -> SampleABC)
+    // (e.g. SampleABC_bt2-bwa_umi_true_hg19_wm_idt_spike_v1.0__5cmc-v1.1/mod_pileup.txt -> SampleABC)
     if (input_file_type == 'mod_pileup') {
         def base = f.name == 'mod_pileup.txt' ? f.parent.name : f.name.replaceAll(/_?mod_pileup\.txt$/, '')
         sample_id = base
