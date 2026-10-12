@@ -135,41 +135,45 @@ For Illumina 5-base or Watchmaker data processed with the 5CmC pipeline, start f
 
 4. submit the pipeline with `sbatch launch.sh`. Each sample is deconvolved in parallel; combined results are written to `<outdir>/deconvolution/deconvolved_samples.csv`. 
 
-*Building a reference atlas and selecting markers (build_atlas.nf)*
+*Building a reference atlas (build_atlas.nf)*
 
-`build_atlas.nf` is the same atlas-construction pipeline as smMethID's. It builds the atlas from per-cell-type
-reference beds, picks marker CpGs, and writes a marker-only map you can pass straight to `main.nf`.
-Run it once per atlas, before deconvolving samples:
+`build_atlas.nf` is the same atlas pipeline as smMethID's. Run it once per atlas:
 
 ```bash
-nextflow run build_atlas.nf \
-    --mapped_bed_dirs "/data/loyfer/Blood-T-CD4/mapped_beds,/data/loyfer/Liver-Hepatocytes/mapped_beds,..." \
-    --n_lineages 8 \
-    --gss_n_markers_per_celltype 50 \
-    --outdir results_atlas
+nextflow run build_atlas.nf -params-file config/atlas_params.json
 ```
 
-- `--mapped_bed_dirs`: comma-separated folders, one per cell type, each holding replicate beds
-  (`chr start end meth cov`). The cell-type name comes from the last two folder names above `mapped_beds`
-  (`.../loyfer/Blood-T-CD4/mapped_beds` becomes `loyfer_Blood-T-CD4`).
-- Steps:
-  1. `BUILD_ATLAS` pools the replicates into `atlas.tsv`.
-  2. `ATLAS_BETA_BINOMIAL_FIT` writes `atlas_beta_binomial_mean.tsv`.
-  3. `GSS_MARKER_SELECTION` (Gap Specificity Score) writes `gss_markers.tsv`.
-  4. `MAKE_MARKER_MAP` writes `methid_map_gss.tsv`.
-  5. `ATLAS_SEPARABILITY` writes the confusability plots and `lineage_map.tsv`.
-- Optional switches: `--run_beta_binomial_fit false`, `--run_gss_marker_selection false`,
-  `--run_lineage_clustering false`. The older F-statistic selection is available with
-  `--run_marker_selection_fstat true --manifest <file>`.
+Copy `config/atlas_params.example.json` and `config/atlas_source.example.json` and edit both. Give the reference
+WGBS beds either as `config` (a JSON of sources and cell types, read as `<base_dir>/<cell_type>/<bed_subdir>`) or as
+`mapped_bed_dirs` (a comma-separated list of per-cell-type folders). It writes to `outdir`:
 
-Then deconvolve against the marker map:
+- `atlas.tsv`: replicates pooled (sum of methylated reads / sum of reads). Usable directly as `methid_map`.
+- `atlas_beta_binomial_mean.tsv` / `_var.tsv` / `_dispersion.tsv`: the beta-binomial fit. The mean file is
+  also usable as `methid_map`, and the var file is what `marker_ranking: standardized` needs.
+- `atlas_pair_separability.csv` and `atlas_confusability_map*.png`: how confusable each pair of cell types is,
+  on all CpGs and again on each `separability_marker_sets` panel (default `5000,20000`).
+- `atlas_marker_balance.tsv`: per cell type, how many CpGs set it apart from its closest other cell type, and how
+  strong its 5,000th / 20,000th / 50,000th best marker is. Use it to choose `markers_per_cell_type`.
+
+*Marker selection*
+
+Marker selection works the same way as in smMethID and runs at deconvolution time, so one atlas serves any panel
+size. Set it in `params.json`:
+
+| Field | Default | Description |
+|---|---|---|
+| `markers_per_cell_type` | `0` | `0` = every atlas CpG. `N` = for each cell type, the N CpGs where it differs most from its closest other cell type, pooled, so every cell type is represented equally. CpGs with a missing beta for any cell type are dropped first. |
+| `marker_ranking` | `gap` | `gap`: difference to the closest other cell type. `standardized`: that difference divided by the combined replicate SD of the two cell types, so CpGs where replicates disagree rank low. Needs `var_atlas_file`; use an atlas built with `min_coverage` of 10 or more. |
+| `var_atlas_file` | unset | `atlas_beta_binomial_var.tsv` from `build_atlas.nf`, for `standardized` ranking. |
 
 ```json
-"methid_map": "results_atlas/methid_map_gss.tsv"
+"methid_map": "results_atlas/atlas_beta_binomial_mean.tsv",
+"markers_per_cell_type": 5000,
+"marker_ranking": "standardized",
+"var_atlas_file": "results_atlas/atlas_beta_binomial_var.tsv"
 ```
 
-Panel size: MethID only uses marker CpGs that a sample covers at least `min_cov` times. With
-`--gss_n_markers_per_celltype 50` and 12 cell types the panel is about 600 CpGs, which is fine for smMethID's
-per-read model but usually too few for low-coverage cfDNA here. Raise it (for example into the thousands), and
-check `overlap_sites` in the coverage table after each run. `atlas.tsv` and `atlas_beta_binomial_mean.tsv` also
-work directly as full, unselected maps.
+The selected CpGs are identical to smMethID's for the same atlas and settings. Each sample's log lists the
+markers kept per cell type, and `atlas_length` in the coverage table becomes the panel size. MethID only uses
+panel CpGs that a sample covers at least `min_cov` times, so check `overlap_sites`: smMethID's per-read model
+gets by with fewer markers than this site-level fit does on low-coverage cfDNA.

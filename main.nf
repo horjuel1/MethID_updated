@@ -19,6 +19,13 @@ params.input_glob      = false
 // '5mC_5hmC' combines 5mC + 5hmC to match WGBS-based maps; '5mC' counts 5mC alone
 params.mod_bases       = '5mC_5hmC'
 
+// Balanced marker selection, as in smMethID: 0 = every atlas CpG; N = for each cell type, the N CpGs
+// where it differs most from its closest other cell type, pooled. marker_ranking 'standardized'
+// divides that difference by the replicate SD and needs var_atlas_file (build_atlas.nf output).
+params.markers_per_cell_type = 0
+params.marker_ranking        = 'gap'
+params.var_atlas_file        = false
+
 // --- Input type handling ---
 
 def valid_types = ['bam', 'bedmethyl', 'shortbed', 'mod_pileup']
@@ -58,6 +65,8 @@ def summary = """
          Ref Genome      : ${params.ref_genome}
          Output Dir      : ${params.outdir}
          Min Coverage    : ${params.min_cov}
+         Markers/cell type: ${params.markers_per_cell_type ?: 'all CpGs'}
+         Marker ranking  : ${params.marker_ranking}
          """
 log.info summary
 new File("${params.outdir}/manifest.txt").write(summary)
@@ -68,6 +77,10 @@ if (!params.input_dir && !params.sample_sheet) {
     exit 1, "No inputs specified! Use --input_dir <dir> or --sample_sheet <file>"
 }
 // Reference genome is only needed when we actually run modkit pileup
+if (!(params.marker_ranking in ['gap', 'standardized'])) { exit 1, "marker_ranking must be 'gap' or 'standardized'" }
+if (params.marker_ranking == 'standardized' && params.markers_per_cell_type && !params.var_atlas_file) {
+    exit 1, "marker_ranking 'standardized' needs var_atlas_file (atlas_beta_binomial_var.tsv from build_atlas.nf)"
+}
 if (params.input_file_type == 'bam' && !params.ref_genome) {
     exit 1, "Reference genome not specified! --ref_genome <file> (required when --input_file_type bam)"
 }
@@ -226,6 +239,8 @@ process DECONVOLVE {
     path("${sample_id}_coverage.tsv"),      emit: cov
 
     script:
+    // Read off the shared filesystem rather than staged, like ref_genome
+    def var_arg = params.var_atlas_file ? "--var_atlas_file \"${file(params.var_atlas_file)}\"" : ""
     """
     Rscript ${baseDir}/bin/deconvolve.r \\
         --map_file "${map_file}" \\
@@ -233,7 +248,9 @@ process DECONVOLVE {
         --sample_name "${sample_id}" \\
         --output_dir "." \\
         --threads "${task.cpus}" \\
-        --min_cov "${params.min_cov}"
+        --min_cov "${params.min_cov}" \\
+        --markers_per_cell_type "${params.markers_per_cell_type}" \\
+        --marker_ranking "${params.marker_ranking}" ${var_arg}
     """
 }
 

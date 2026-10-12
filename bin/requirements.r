@@ -50,7 +50,6 @@ cran_packages <- c(
   "limSolve",
   "argparser",
   "ggplot2",
-  "patchwork",
   "jsonlite"
 )
 

@@ -1,16 +1,11 @@
 #!/usr/bin/env Rscript
 
-# Beta-binomial hyperparameter fit on top of build_atlas.r's already-pooled
-# counts (doc-8-era atlas layer, per the unified EM framework spec's layer
-# A). build_atlas.r's --get_raw_atlas already retains everything this
-# script needs -- per-replicate meth/cov counts, one column pair per
-# (cell_type, sample) -- so this reads its <output>_raw_counts.tsv output
-# rather than re-deriving anything from the mapped.bed inputs, and its
-# plain <output>.tsv for the authoritative list of cell-type labels (raw
-# count column names are "<cell_type>_<sample>_meth"/"..._cov", and a
-# cell-type label can itself contain underscores, so cell types are
-# matched by known-label prefix against atlas.tsv's own column names
-# rather than parsed positionally, which would be ambiguous).
+# Beta-binomial hyperparameter fit on top of build_atlas.r's pooled atlas.
+# Reads build_atlas.r's per-cell-type count files
+# (<output>_raw_counts/<cell_type>.tsv.gz: one meth + one cov column per
+# replicate, "<cell_type>_<sample>_meth"/"..._cov") one cell type at a time,
+# and its plain <output>.tsv for the cell-type list and CpG rows. Output
+# tables have the atlas's rows, in its order.
 #
 # METHOD: per cell type k, a single shared overdispersion parameter phi_k
 # (the intra-class correlation of the beta-binomial, i.e. the phi in
@@ -36,14 +31,11 @@
 # via used_global_fallback in atlas_dispersion.tsv rather than silently
 # guessing or crashing.
 #
-# REFINEMENT ON THE ORIGINAL SPEC WORTH FLAGGING EXPLICITLY: the spec's own
-# formula (a_kj = mu_kj*(1-phi_k)/phi_k, applied directly) gives every CpG
+# Why not plain a_kj = mu_kj*(1-phi_k)/phi_k: that gives every CpG
 # for a cell type the SAME total pseudo-count weight (1-phi_k)/phi_k
-# regardless of that specific CpG's own pooled coverage -- which does not
-# actually produce the "Var[beta_kj] shrinks toward 0 as coverage grows"
-# behavior the spec's own narrative promises, since a real per-CpG
-# coverage difference never enters a_kj/b_kj under that formula. This
-# script instead treats phi_k's implied pseudo-count weight as an
+# regardless of that CpG's own pooled coverage, so Var[beta_kj] would not
+# shrink as coverage grows. This script
+# instead treats phi_k's implied pseudo-count weight as an
 # empirical-Bayes PRIOR (a0_kj = mu_kj*m_k, b0_kj = (1-mu_kj)*m_k, with
 # m_k = (1-phi_k)/phi_k), then forms the per-CpG POSTERIOR by adding that
 # CpG's own already-pooled (meth_kj, cov_kj) on top:
@@ -60,7 +52,7 @@ suppressWarnings(suppressMessages(library(argparser)))
 
 p <- arg_parser("Fit beta-binomial hyperparameters (a_kj, b_kj, E[beta_kj], Var[beta_kj]) on top of build_atlas.r's pooled atlas")
 p <- add_argument(p, "--atlas_file",      type = "character", help = "build_atlas.r's pooled <output>.tsv -- authoritative cell-type label list and pooled beta (E[beta_kj])")
-p <- add_argument(p, "--raw_counts_file", type = "character", help = "build_atlas.r's <output>_raw_counts.tsv (requires --get_raw_atlas true when building the atlas)")
+p <- add_argument(p, "--raw_counts_dir", type = "character", help = "build_atlas.r's <output>_raw_counts directory (one <cell_type>.tsv.gz per cell type)")
 p <- add_argument(p, "--output_prefix",   type = "character", default = "atlas_beta_binomial", help = "Output file prefix [atlas_beta_binomial]")
 p <- add_argument(p, "--min_coverage",    type = "double",  default = 1, help = "Minimum pooled coverage for a CpG's mean/variance to be reported (NA below this), matching build_atlas.r's own --min_coverage convention [1]")
 p <- add_argument(p, "--min_df_for_dispersion", type = "integer", default = 30, help = "Minimum sum(total_cov_j - n_j) coverage-based degrees of freedom across multi-replicate CpGs required to estimate a cell type's own phi_k; below this, fall back to the global pooled phi [30]")
@@ -69,71 +61,34 @@ p <- add_argument(p, "--max_phi", type = "double", default = 0.999, help = "Ceil
 
 args <- parse_args(p)
 
-atlas <- fread(args$atlas_file, data.table = TRUE)
-cell_types <- setdiff(colnames(atlas), c("chr", "start", "end"))
+atlas <- fread(args$atlas_file, data.table = TRUE, select = 1:3)
+cell_types <- setdiff(names(fread(args$atlas_file, nrows = 0)), c("chr", "start", "end"))
 if (length(cell_types) == 0) stop("--atlas_file has no cell-type columns beyond chr/start/end.")
+pos <- atlas[, .(chr, start, end)]
+rm(atlas)
 
-raw_counts <- fread(args$raw_counts_file, data.table = TRUE)
-count_cols <- setdiff(colnames(raw_counts), c("chr", "start", "end"))
-meth_cols  <- grep("_meth$", count_cols, value = TRUE)
-cov_cols   <- grep("_cov$",  count_cols, value = TRUE)
-if (length(meth_cols) == 0 || length(cov_cols) == 0) {
-  stop("No *_meth/*_cov columns found in --raw_counts_file. Expected build_atlas.r's <output>_raw_counts.tsv (--get_raw_atlas true).")
-}
-
-# Match each meth/cov column pair to its cell type by known-label prefix
-# (longest label first, so e.g. "loyfer_Blood-T-CD4-Memory" claims its own
-# columns before the shorter "loyfer_Blood-T-CD4" can).
-cell_types_by_length <- cell_types[order(-nchar(cell_types))]
-match_cell_type <- function(col, suffix) {
-  for (ct in cell_types_by_length) {
-    prefix <- paste0(ct, "_")
-    if (startsWith(col, prefix) && endsWith(col, suffix)) return(ct)
-  }
-  NA_character_
-}
-meth_ct <- vapply(meth_cols, match_cell_type, character(1), suffix = "_meth")
-cov_ct  <- vapply(cov_cols,  match_cell_type, character(1), suffix = "_cov")
-
-unmatched <- c(meth_cols[is.na(meth_ct)], cov_cols[is.na(cov_ct)])
-if (length(unmatched) > 0) {
-  message(sprintf("Note: %d raw-count column(s) didn't match any --atlas_file cell type by prefix, dropped: %s",
-                   length(unmatched), paste(head(unmatched, 5), collapse = ", ")))
-}
-
-pos <- raw_counts[, .(chr, start, end)]
-
-# -----------------------------------------------
-# Per cell type: pool meth/cov this script computes independently from the
-# raw per-replicate columns (self-contained -- does not assume row order
-# agrees with --atlas_file), fit phi_k, then form per-CpG posterior a_kj/b_kj.
-# -----------------------------------------------
-
-fit_one_cell_type <- function(ct) {
-  ct_meth_cols <- meth_cols[!is.na(meth_ct) & meth_ct == ct]
-  ct_cov_cols  <- cov_cols[!is.na(cov_ct) & cov_ct == ct]
-  # pair by sample key (column name with the cell-type prefix and _meth/_cov
-  # suffix stripped)
-  meth_keys <- sub(paste0("^", ct, "_"), "", sub("_meth$", "", ct_meth_cols))
-  cov_keys  <- sub(paste0("^", ct, "_"), "", sub("_cov$",  "", ct_cov_cols))
+# One cell type's per-replicate counts -> pooled totals plus the matrices the
+# dispersion estimate needs. Columns are "<cell_type>_<sample>_meth/_cov".
+read_cell_type <- function(ct) {
+  f <- file.path(args$raw_counts_dir, paste0(ct, ".tsv.gz"))
+  if (!file.exists(f)) stop("No raw counts file for cell type '", ct, "': ", f)
+  raw <- fread(f, data.table = TRUE)
+  meth_cols <- grep("_meth$", names(raw), value = TRUE)
+  cov_cols  <- grep("_cov$",  names(raw), value = TRUE)
+  meth_keys <- sub("_meth$", "", meth_cols)
+  cov_keys  <- sub("_cov$",  "", cov_cols)
   keys <- intersect(meth_keys, cov_keys)
-  if (length(keys) == 0) stop("Cell type '", ct, "' has no matched meth/cov column pairs in --raw_counts_file.")
-
-  meth_mat <- as.matrix(raw_counts[, ct_meth_cols[match(keys, meth_keys)], with = FALSE])
-  cov_mat  <- as.matrix(raw_counts[, ct_cov_cols[match(keys, cov_keys)],  with = FALSE])
-
+  if (length(keys) == 0) stop("Cell type '", ct, "' has no matched meth/cov column pairs in ", f)
+  meth_mat <- as.matrix(raw[, meth_cols[match(keys, meth_keys)], with = FALSE])
+  cov_mat  <- as.matrix(raw[, cov_cols[match(keys, cov_keys)],  with = FALSE])
   total_meth <- rowSums(meth_mat, na.rm = TRUE)
   total_cov  <- rowSums(cov_mat,  na.rm = TRUE)
-  mu <- ifelse(total_cov > 0, total_meth / total_cov, NA_real_)
-
-  n_replicates <- length(keys)
-  n_covered <- rowSums(!is.na(cov_mat) & cov_mat > 0)
-
-  list(n_replicates = n_replicates, mu = mu, total_meth = total_meth, total_cov = total_cov,
-       n_covered = n_covered, meth_mat = meth_mat, cov_mat = cov_mat)
+  list(pos = raw[, .(chr, start, end)], n_replicates = length(keys),
+       mu = ifelse(total_cov > 0, total_meth / total_cov, NA_real_),
+       total_meth = total_meth, total_cov = total_cov,
+       n_covered = rowSums(!is.na(cov_mat) & cov_mat > 0),
+       meth_mat = meth_mat, cov_mat = cov_mat)
 }
-
-fits <- setNames(lapply(cell_types, fit_one_cell_type), cell_types)
 
 # -----------------------------------------------
 # Method-of-moments phi_k per cell type
@@ -142,50 +97,30 @@ fits <- setNames(lapply(cell_types, fit_one_cell_type), cell_types)
 # For observation (replicate s, CpG j) with coverage cov_sj, the
 # beta-binomial model gives Var(Y_sj) = cov_sj*mu_j*(1-mu_j)*[1+(cov_sj-1)*phi],
 # so the Pearson residual cov_sj*(p_sj-mu_j)^2/[mu_j(1-mu_j)] has expectation
-# 1+(cov_sj-1)*phi PER OBSERVATION -- the (n-1) inflation term is driven by
-# each observation's own COVERAGE (reads within that replicate), not by how
-# many replicate samples there are. Pooling S_j = sum_s of that residual
-# across a CpG's covered replicates:
-#   E[S_j] = n_j - 1 [1 df lost estimating mu_j from the same data] +
-#            phi * (total_cov_j - n_j) [overdispersion contribution, scales
-#            with total coverage, not replicate count]
-# so phi is recovered from the EXCESS of S_j over its pure-binomial
-# expectation, divided by the coverage-based term it multiplies:
-#   phi_hat = [sum_j(S_j - (n_j-1))] / [sum_j(total_cov_j - n_j)]
-# (An earlier version of this estimator divided by (n_bar_replicates - 1)
-# instead -- i.e. used the number of replicate SAMPLES as the beta-binomial
-# "trial size" -- which is a different, much smaller quantity than each
-# observation's own coverage and inflated phi_hat by roughly
-# coverage/replicate_count; caught by checking recovered phi against a
-# known-truth synthetic simulation before this script was used anywhere.)
+# 1+(cov_sj-1)*phi per observation. Summed over a CpG's covered replicates:
+#   E[S_j] = (n_j - 1) + phi * (total_cov_j - n_j)
+# so phi_hat = [sum_j(S_j - (n_j-1))] / [sum_j(total_cov_j - n_j)].
 estimate_phi <- function(fit) {
-  mu <- fit$mu
-  meth_mat <- fit$meth_mat
-  cov_mat  <- fit$cov_mat
-  n_covered <- fit$n_covered
-  total_cov <- fit$total_cov
-
-  qualifying <- which(n_covered >= 2 & !is.na(mu) & mu > 0 & mu < 1)
-  if (length(qualifying) == 0) return(list(phi = NA_real_, sum_S = NA_real_, sum_meandf = 0, sum_covdf = 0))
-
-  S <- numeric(length(qualifying))
-  for (i in seq_along(qualifying)) {
-    r <- qualifying[i]
-    covered <- which(!is.na(cov_mat[r, ]) & cov_mat[r, ] > 0)
-    p_s <- meth_mat[r, covered] / cov_mat[r, covered]
-    m <- mu[r]
-    S[i] <- sum(cov_mat[r, covered] * (p_s - m)^2) / (m * (1 - m))
-  }
-  n_j <- n_covered[qualifying]
-  cov_j <- total_cov[qualifying]
-  sum_S <- sum(S)
-  sum_meandf <- sum(n_j - 1)     # df lost estimating each CpG's own mu_j
-  sum_covdf  <- sum(cov_j - n_j) # coverage-based term overdispersion acts on
-
-  list(phi = NA_real_, sum_S = sum_S, sum_meandf = sum_meandf, sum_covdf = sum_covdf)
+  q <- which(fit$n_covered >= 2 & !is.na(fit$mu) & fit$mu > 0 & fit$mu < 1)
+  if (length(q) == 0) return(list(sum_S = NA_real_, sum_meandf = 0, sum_covdf = 0))
+  cov_q <- fit$cov_mat[q, , drop = FALSE]
+  p_q <- fit$meth_mat[q, , drop = FALSE] / cov_q
+  m <- fit$mu[q]
+  terms <- cov_q * (p_q - m)^2
+  terms[is.na(cov_q) | cov_q <= 0] <- 0
+  S <- rowSums(terms) / (m * (1 - m))
+  list(sum_S = sum(S), sum_meandf = sum(fit$n_covered[q] - 1), sum_covdf = sum(fit$total_cov[q] - fit$n_covered[q]))
 }
 
-phi_stats <- lapply(fits, estimate_phi)
+# Pass 1: dispersion statistics, one cell type at a time
+phi_stats <- list()
+n_replicates <- integer(0)
+for (ct in cell_types) {
+  fit <- read_cell_type(ct)
+  phi_stats[[ct]] <- estimate_phi(fit)
+  n_replicates[ct] <- fit$n_replicates
+  rm(fit); invisible(gc())
+}
 
 moments_to_phi <- function(s, min_phi, max_phi) {
   if (is.na(s$sum_S) || is.na(s$sum_covdf) || s$sum_covdf <= 0) return(NA_real_)
@@ -219,7 +154,7 @@ if (any(used_global_fallback)) {
 dispersion_dt <- data.table(
   cell_type = cell_types,
   phi_k = round(phi_k, 6),
-  n_replicates = vapply(fits, function(f) f$n_replicates, integer(1)),
+  n_replicates = as.integer(n_replicates[cell_types]),
   dispersion_covdf = round(vapply(phi_stats, function(s) s$sum_covdf, numeric(1)), 1),
   used_global_fallback = used_global_fallback
 )
@@ -231,27 +166,26 @@ cat("Per-cell-type dispersion fit:\n"); print(dispersion_dt)
 # cell type, same row order/shape as --atlas_file
 # -----------------------------------------------
 
+# Pass 2: per-CpG posterior a_kj, b_kj -> E[beta_kj], Var[beta_kj], aligned
+# to the atlas rows (CpGs this cell type never covered stay NA).
 mean_dt <- copy(pos)
 var_dt  <- copy(pos)
 
 for (ct in cell_types) {
-  f <- fits[[ct]]
-  mu <- f$mu
+  f <- read_cell_type(ct)
   m_k <- (1 - phi_k[[ct]]) / phi_k[[ct]]   # prior pseudo-count weight from phi_k
-  a0 <- mu * m_k
-  b0 <- (1 - mu) * m_k
-  a_post <- a0 + f$total_meth
-  b_post <- b0 + (f$total_cov - f$total_meth)
-
+  a_post <- f$mu * m_k + f$total_meth
+  b_post <- (1 - f$mu) * m_k + (f$total_cov - f$total_meth)
   e_beta <- a_post / (a_post + b_post)
   var_beta <- (a_post * b_post) / ((a_post + b_post)^2 * (a_post + b_post + 1))
-
   below_min_cov <- is.na(f$total_cov) | f$total_cov < args$min_coverage
   e_beta[below_min_cov] <- NA_real_
   var_beta[below_min_cov] <- NA_real_
 
-  mean_dt[[ct]] <- round(e_beta, 4)
-  var_dt[[ct]]  <- signif(var_beta, 4)
+  res <- f$pos[, `:=`(e = round(e_beta, 4), v = signif(var_beta, 4))]
+  mean_dt[res, (ct) := i.e, on = .(chr, start, end)]
+  var_dt[res,  (ct) := i.v, on = .(chr, start, end)]
+  rm(f, res); invisible(gc())
 }
 
 fwrite(mean_dt, paste0(args$output_prefix, "_mean.tsv"), sep = "\t", quote = FALSE)
