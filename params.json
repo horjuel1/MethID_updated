@@ -1,9 +1,7 @@
 {
     "methid_map": "map.tsv",
-    "input_file_type": "bam",
-    "input_dir": "bam_dir",
-    "ref_genome": "hg19.fa",
-    "mod_bases": "5mC_5hmC",
+    "input_file_type": "mod_pileup",
+    "input_dir": "path/to/5CmC/output",
     "outdir": "results_dir",
     "min_cov": 2
 }
