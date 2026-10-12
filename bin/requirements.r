@@ -1,6 +1,12 @@
 options(
-  repos = c(CRAN = "https://cloud.r-project.org"),
-  Ncpus = max(1, parallel::detectCores() - 1)
+  repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/jammy/2026-05-01"),
+  BioC_mirror = "https://packagemanager.posit.co/bioconductor",
+  HTTPUserAgent = sprintf(
+    "R/%s R (%s)",
+    getRversion(),
+    paste(getRversion(), R.version$platform, R.version$arch, R.version$os)
+  ),
+  Ncpus = min(8, max(1, parallel::detectCores() - 1))
 )
 
 if (!requireNamespace("BiocManager", quietly = TRUE)) {
@@ -40,15 +46,13 @@ install_and_verify_bioc <- function(pkgs) {
 cran_packages <- c(
   "tidyverse",
   "data.table",
-  "ggplot2",
   "gridExtra",
   "limSolve",
   "argparser"
 )
 
 bioc_packages <- c(
-  "GenomicRanges",
-  "IlluminaHumanMethylation450kanno.ilmn12.hg19"
+  "GenomicRanges"
 )
 
 install_and_verify_cran(cran_packages)

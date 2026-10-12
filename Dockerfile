@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libfribidi-dev \
     libgit2-dev \
     libudunits2-dev \
+    libuv1-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install modkit v0.6.1
@@ -56,8 +57,6 @@ RUN modkit --help >/dev/null && \
     R -e "suppressWarnings(suppressMessages(library(GenomicRanges))); \
           suppressWarnings(suppressMessages(library(tidyverse))); \
           suppressWarnings(suppressMessages(library(data.table))); \
-          suppressWarnings(suppressMessages(library(IlluminaHumanMethylation450kanno.ilmn12.hg19))); \
-          suppressWarnings(suppressMessages(library(ggplot2))); \
           suppressWarnings(suppressMessages(library(gridExtra))); \
           suppressWarnings(suppressMessages(library(limSolve))); \
           suppressWarnings(suppressMessages(library(argparser))); \

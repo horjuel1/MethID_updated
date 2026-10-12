@@ -1,5 +1,9 @@
-methid.sif
-methid.tar
-/logs
+*.sif
+*.tar
+*.tar.gz
 /work
+/logs
+/results
 /.nextflow
+.nextflow.log*
+.DS_Store

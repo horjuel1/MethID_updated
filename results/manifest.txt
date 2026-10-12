@@ -1,9 +1,0 @@
-
-         M E T H Y L A T I O N   D E C O N V O L U T I O N
-         ================================================
-         Atlas Map    : false
-         Sample Sheet : false
-         Ref Genome   : false
-         Output Dir   : results
-         Min Coverage : 2
-         
