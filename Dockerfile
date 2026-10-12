@@ -10,6 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     cmake \
     samtools \
+    python3 \
+    python3-pandas \
+    python3-scipy \
     build-essential \
     gfortran \
     libblas-dev \
@@ -54,12 +57,15 @@ COPY . /app
 # Validate tools and packages
 RUN modkit --help >/dev/null && \
     samtools --version && \
+    python3 -c "import pandas, scipy" && \
     R -e "suppressWarnings(suppressMessages(library(GenomicRanges))); \
           suppressWarnings(suppressMessages(library(tidyverse))); \
           suppressWarnings(suppressMessages(library(data.table))); \
           suppressWarnings(suppressMessages(library(gridExtra))); \
           suppressWarnings(suppressMessages(library(limSolve))); \
           suppressWarnings(suppressMessages(library(argparser))); \
+          suppressWarnings(suppressMessages(library(patchwork))); \
+          suppressWarnings(suppressMessages(library(jsonlite))); \
           cat('All packages loaded successfully\n')"
 
 CMD ["R"]
