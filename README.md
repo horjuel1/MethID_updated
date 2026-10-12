@@ -134,3 +134,42 @@ For Illumina 5-base or Watchmaker data processed with the 5CmC pipeline, start f
 - No modkit step and no `ref_genome` are needed. The CG-Align reference must be the same genome build as the MethID map.
 
 4. submit the pipeline with `sbatch launch.sh`. Each sample is deconvolved in parallel; combined results are written to `<outdir>/deconvolution/deconvolved_samples.csv`. 
+
+*Building a reference atlas and selecting markers (build_atlas.nf)*
+
+`build_atlas.nf` is the same atlas-construction pipeline as smMethID's. It builds the atlas from per-cell-type
+reference beds, picks marker CpGs, and writes a marker-only map you can pass straight to `main.nf`.
+Run it once per atlas, before deconvolving samples:
+
+```bash
+nextflow run build_atlas.nf \
+    --mapped_bed_dirs "/data/loyfer/Blood-T-CD4/mapped_beds,/data/loyfer/Liver-Hepatocytes/mapped_beds,..." \
+    --n_lineages 8 \
+    --gss_n_markers_per_celltype 50 \
+    --outdir results_atlas
+```
+
+- `--mapped_bed_dirs`: comma-separated folders, one per cell type, each holding replicate beds
+  (`chr start end meth cov`). The cell-type name comes from the last two folder names above `mapped_beds`
+  (`.../loyfer/Blood-T-CD4/mapped_beds` becomes `loyfer_Blood-T-CD4`).
+- Steps:
+  1. `BUILD_ATLAS` pools the replicates into `atlas.tsv`.
+  2. `ATLAS_BETA_BINOMIAL_FIT` writes `atlas_beta_binomial_mean.tsv`.
+  3. `GSS_MARKER_SELECTION` (Gap Specificity Score) writes `gss_markers.tsv`.
+  4. `MAKE_MARKER_MAP` writes `methid_map_gss.tsv`.
+  5. `ATLAS_SEPARABILITY` writes the confusability plots and `lineage_map.tsv`.
+- Optional switches: `--run_beta_binomial_fit false`, `--run_gss_marker_selection false`,
+  `--run_lineage_clustering false`. The older F-statistic selection is available with
+  `--run_marker_selection_fstat true --manifest <file>`.
+
+Then deconvolve against the marker map:
+
+```json
+"methid_map": "results_atlas/methid_map_gss.tsv"
+```
+
+Panel size: MethID only uses marker CpGs that a sample covers at least `min_cov` times. With
+`--gss_n_markers_per_celltype 50` and 12 cell types the panel is about 600 CpGs, which is fine for smMethID's
+per-read model but usually too few for low-coverage cfDNA here. Raise it (for example into the thousands), and
+check `overlap_sites` in the coverage table after each run. `atlas.tsv` and `atlas_beta_binomial_mean.tsv` also
+work directly as full, unselected maps.

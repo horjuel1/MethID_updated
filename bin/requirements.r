@@ -48,7 +48,10 @@ cran_packages <- c(
   "data.table",
   "gridExtra",
   "limSolve",
-  "argparser"
+  "argparser",
+  "ggplot2",
+  "patchwork",
+  "jsonlite"
 )
 
 bioc_packages <- c(
