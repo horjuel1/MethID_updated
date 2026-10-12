@@ -24,7 +24,7 @@
 params.mapped_bed_dirs   = false   // comma-separated list of per-cell-type mapped.bed directories
 params.samples_to_exclude = false  // optional comma-separated sample (bed file) names to exclude
 params.summarize_method  = 'pooled_counts'  // 'pooled_counts' (recommended), 'mean', or 'median' -- see bin/build_atlas.r
-params.min_coverage      = 1
+params.min_coverage      = 10
 // Changed from the original false default: the beta-binomial fit below
 // needs the per-replicate raw counts, and it runs by default now, so raw
 // atlas output defaults on too. Set false only if you're disabling every
