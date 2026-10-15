@@ -1,0 +1,17 @@
+{
+    "methid_map": "/path/to/results_atlas/atlas_beta_binomial_mean.tsv",
+
+    "input_file_type": "mod_pileup",
+    "input_dir": "/dcs10/scharpf/data/5b-project-hub/2026-03_5-Base_Healthy_Ref",
+    "sample_sheet": false,
+
+    "ref_genome": false,
+    "mod_bases": "5mC_5hmC",
+
+    "markers_per_cell_type": 0,
+    "marker_ranking": "gap",
+    "var_atlas_file": false,
+
+    "outdir": "/path/to/results_deconvolution",
+    "min_cov": 2
+}

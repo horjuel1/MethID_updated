@@ -61,6 +61,7 @@ RUN modkit --help >/dev/null && \
           suppressWarnings(suppressMessages(library(limSolve))); \
           suppressWarnings(suppressMessages(library(argparser))); \
           suppressWarnings(suppressMessages(library(jsonlite))); \
+          suppressWarnings(suppressMessages(library(R.utils))); \
           cat('All packages loaded successfully\n')"
 
 CMD ["R"]

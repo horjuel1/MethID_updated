@@ -22,7 +22,10 @@ params.config            = false   // JSON manifest: { "<source>": { "base_dir":
                                     // written (expects <base_dir>/<cell_type>/<bed_subdir> per source/cell_type), but this
                                     // Nextflow wrapper never actually wired it through until now. Mutually exclusive with
                                     // --mapped_bed_dirs.
-params.bed_subdir        = false   // only used with --config; overrides bin/build_atlas.r's own "bed_hg19" default if set
+params.sources           = false   // the same { "<source>": { "base_dir": ..., "cell_types": [...] } } manifest written inline
+                                    // in the params file, so map building needs only one file. Written to
+                                    // <outdir>/atlas_sources.json and used like --config.
+params.bed_subdir        = false   // only used with --config / sources; overrides bin/build_atlas.r's own "bed_hg19" default if set
 params.samples_to_exclude = false  // optional comma-separated sample (bed file) names to exclude
 params.min_coverage      = 1
 params.output_name       = 'atlas.tsv'
@@ -45,6 +48,7 @@ def summary = """
          ====================================
          Mapped bed dirs         : ${params.mapped_bed_dirs}
          Config                  : ${params.config}
+         Sources                 : ${params.sources ? params.sources.collect { k, v -> "${k} (${v.cell_types?.size() ?: 0} cell types)" }.join(', ') : false}
          Min coverage            : ${params.min_coverage}
          Output dir              : ${params.outdir}
          """
@@ -52,8 +56,9 @@ log.info summary
 new File("${params.outdir}/manifest.txt").write(summary)
 
 // Input validation
-if (!params.mapped_bed_dirs && !params.config) { exit 1, "Provide either --mapped_bed_dirs (comma-separated list of per-cell-type mapped.bed directories) or --config (a JSON source/cell_type manifest)" }
-if (params.mapped_bed_dirs && params.config) { exit 1, "Pass either --mapped_bed_dirs or --config, not both." }
+def n_input_modes = [params.mapped_bed_dirs, params.config, params.sources].count { it }
+if (n_input_modes == 0) { exit 1, "Provide one of: sources (in the params file), --config (a JSON source/cell_type manifest), or --mapped_bed_dirs (comma-separated per-cell-type directories)" }
+if (n_input_modes > 1) { exit 1, "Pass only one of sources, --config, or --mapped_bed_dirs." }
 
 // Two mutually-exclusive input modes: --mapped_bed_dirs resolves to a plain
 // list of directories at the Nextflow level (validated here); --config just
@@ -77,6 +82,11 @@ if (params.mapped_bed_dirs) {
     input_dirs.each { d ->
         if (!file(d).isDirectory()) { exit 1, "--mapped_bed_dirs entry is not a directory: ${d}" }
     }
+} else if (params.sources) {
+    if (!(params.sources instanceof Map)) { exit 1, "sources must be a JSON object: { \"<source>\": { \"base_dir\": \"...\", \"cell_types\": [...] } }" }
+    def sources_file = file("${params.outdir}/atlas_sources.json").toAbsolutePath()
+    sources_file.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(params.sources))
+    config_abs_path = sources_file.toString()
 } else {
     if (!file(params.config).exists()) { exit 1, "--config file not found: ${params.config}" }
     // NOTE: reassigning params.config directly here is silently a no-op --
@@ -89,7 +99,7 @@ if (params.mapped_bed_dirs) {
 // --- Processes ---
 
 process BUILD_ATLAS {
-    tag params.config ? "Build atlas from --config ${params.config}" : "Build atlas from ${input_dirs.size()} cell-type director(ies)"
+    tag params.mapped_bed_dirs ? "Build atlas from ${input_dirs.size()} cell-type director(ies)" : "Build atlas from ${params.sources ? 'sources' : params.config}"
     publishDir params.outdir, mode: 'copy'
     cpus params.cpus
 

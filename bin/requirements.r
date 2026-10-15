@@ -50,7 +50,8 @@ cran_packages <- c(
   "limSolve",
   "argparser",
   "ggplot2",
-  "jsonlite"
+  "jsonlite",
+  "R.utils"
 )
 
 bioc_packages <- c(
