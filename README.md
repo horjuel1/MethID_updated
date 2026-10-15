@@ -6,10 +6,10 @@ sample's methylation at every CpG covered at least `min_cov` times.
 
 It runs as two Nextflow pipelines on a SLURM cluster, each with one params file and one launch script:
 
-| Step | Pipeline | Params file | Launch script |
+| Step | Pipeline | Params template | Launch script |
 |---|---|---|---|
-| 1. Build a reference map (once per map) | `build_atlas.nf` | `params_build_map.json` | `launch_build_map.sh` |
-| 2. Deconvolve samples | `main.nf` | `params_deconvolve.json` | `launch_deconvolve.sh` |
+| 1. Build a reference map (once per map) | `build_atlas.nf` | `config/atlas_params.json` | `launch/launch_build_atlas.sh` |
+| 2. Deconvolve samples | `main.nf` | `config/params.json` | `launch/launch.sh` |
 
 Step 1 is optional. `Orjuela2026.tsv.gz`, the hg19 map used for figure 5C in Orjuela et al. 2026, works as is.
 
@@ -33,10 +33,10 @@ flowchart TD
 
     subgraph DECON["Step 2: main.nf"]
         direction TB
-        BAM[/"bam: ONT modBAMs"/]
-        BEDM[/"bedmethyl: modkit output"/]
-        PILE[/"mod_pileup: 5CmC 5-base"/]
-        SHORTIN[/"shortbed: earlier run"/]
+        BAM[/"platform: ont<br/>modBAMs"/]
+        BEDM[/"start_from: bedmethyl<br/>modkit output"/]
+        PILE[/"platform: 5base<br/>5CmC mod_pileup.txt"/]
+        SHORTIN[/"start_from: shortbed<br/>earlier run"/]
         MODKIT["MODKIT_PILEUP<br/>mod_bases: 5mC_5hmC or 5mC"]
         B2S["BEDMETHYL_TO_SHORTBED"]
         P2S["MOD_PILEUP_TO_SHORTBED<br/>drop SNPs, merge strands"]
@@ -62,17 +62,23 @@ flowchart TD
 
 ```
 MethID/
-├── build_atlas.nf            # pipeline: build a reference map
-├── main.nf                   # pipeline: deconvolve samples
-├── params_build_map.json     # settings for build_atlas.nf
-├── params_deconvolve.json    # settings for main.nf
-├── launch_build_map.sh       # sbatch launcher for build_atlas.nf
-├── launch_deconvolve.sh      # sbatch launcher for main.nf
-├── nextflow.config           # SLURM resources and the container
-├── Dockerfile                # container recipe
-├── Orjuela2026.tsv.gz        # bundled hg19 reference map
-└── bin/                      # R scripts the pipelines call
+├── main.nf                          # pipeline: deconvolve samples
+├── build_atlas.nf                   # pipeline: build a reference map
+├── nextflow.config                  # SLURM resources and the container
+├── Dockerfile                       # container recipe
+├── Orjuela2026.tsv.gz               # bundled hg19 reference map
+├── bin/                             # R scripts the pipelines call
+├── config/
+│   ├── params.json                  # template: settings for main.nf
+│   ├── atlas_params.json            # template: settings for build_atlas.nf
+│   └── sample_sheet.example.tsv     # template: optional sample sheet
+└── launch/
+    ├── launch.sh                    # sbatch launcher for main.nf
+    └── launch_build_atlas.sh        # sbatch launcher for build_atlas.nf
 ```
+
+The repo itself stays untouched. Each run lives in its own directory holding its params file (copied from
+`config/`); you launch from there, and its results, logs and Nextflow resume history land there too.
 
 ## Setup
 
@@ -128,21 +134,37 @@ Rebuild the container only when `Dockerfile` or `bin/requirements.r` change. The
 
 ## Running
 
-Edit the params file, then submit from the repo folder. Logs go to `logs/`, and Nextflow's work files go to
-`$MYSCRATCH/nextflow_work/`.
+Build a map (once per map; optional):
 
 ```bash
-sbatch launch_build_map.sh
-sbatch launch_deconvolve.sh
+mkdir my_atlas && cd my_atlas
+cp /path/to/MethID_updated/config/atlas_params.json .      # edit it
+sbatch /path/to/MethID_updated/launch/launch_build_atlas.sh
 ```
 
-Both launchers take another params file as the first argument, and pass anything after it to Nextflow:
+Deconvolve a batch of samples:
 
 ```bash
-sbatch launch_deconvolve.sh params_my_project.json -resume
+mkdir my_run && cd my_run
+cp /path/to/MethID_updated/config/params.json .            # edit it (+ a sample sheet, if used)
+sbatch /path/to/MethID_updated/launch/launch.sh
 ```
 
-## 1. Building a reference map (`params_build_map.json`)
+Relative paths in the params file (`methid_map`, `input_dir`, `sample_sheet`, `outdir`, `base_dir`) resolve
+against the run directory. The SLURM log (`MethID_<jobid>.log`) and `logs/nextflow.log` land there, and
+Nextflow's work files go to `$MYSCRATCH/nextflow_work/<run directory name>`. Runs resume by default, so
+resubmitting picks up where a failed run stopped.
+
+A launcher takes another params file as its first argument and passes anything after it to Nextflow:
+
+```bash
+sbatch /path/to/MethID_updated/launch/launch.sh params_other.json -with-report report.html
+```
+
+The launchers find the repo from the path you submit them with; set `METHID_DIR=/path/to/MethID_updated` if
+that ever fails.
+
+## 1. Building a reference map (`config/atlas_params.json`)
 
 `build_atlas.nf` is the same atlas pipeline as smMethID's. It pools the reference WGBS replicates per cell type,
 fits a beta-binomial model, and measures how separable the cell types are.
@@ -172,32 +194,33 @@ Outputs in `outdir`:
   strong its 5,000th / 20,000th / 50,000th best marker is. Use it to choose `markers_per_cell_type`.
 - `atlas_sources.json`: the `sources` used, for the record.
 
-## 2. Deconvolving samples (`params_deconvolve.json`)
+## 2. Deconvolving samples (`config/params.json`)
 
 | Field | Default | Description |
 |---|---|---|
 | `methid_map` | — | Reference map: `chr start end <cell type betas...>`, betas from 0 to 1, same genome build as the samples. |
-| `input_file_type` | `bam` | What the inputs are: `bam`, `mod_pileup` (5CmC), `bedmethyl`, or `shortbed` (see below). |
+| `platform` | — | `ont` (ONT modBAMs) or `5base` (5CmC output). Required. |
+| `start_from` | `false` | Restart from an intermediate instead of the platform's raw input: `shortbed` (either platform) or `bedmethyl` (`ont` only). |
 | `input_dir` | — | Folder with the inputs. Use this or `sample_sheet`. |
 | `sample_sheet` | `false` | TSV listing the inputs (see below). Use this or `input_dir`. |
-| `ref_genome` | — | Reference FASTA. BAM input only. |
-| `mod_bases` | `5mC_5hmC` | BAM input only. `5mC_5hmC` counts 5mC and 5hmC together as methylated, matching WGBS-based maps; `5mC` counts 5mC alone. |
+| `ref_genome` | — | Reference FASTA. `ont` only. |
+| `mod_bases` | `5mC_5hmC` | `ont` only. `5mC_5hmC` counts 5mC and 5hmC together as methylated, matching WGBS-based maps; `5mC` counts 5mC alone. |
 | `markers_per_cell_type` | `0` | Marker selection (see below). `0` uses every CpG in the map. |
 | `marker_ranking` | `gap` | `gap` or `standardized`. |
 | `var_atlas_file` | `false` | `atlas_beta_binomial_var.tsv`, needed for `standardized`. |
 | `outdir` | `results` | Output folder. |
 | `min_cov` | `2` | Minimum reads at a CpG for it to be used. |
 
-### Input types
+### Inputs
 
-| `input_file_type` | `input_dir` holds | Sample name |
-|---|---|---|
-| `bam` | `*.bam` with `.bai` indexes (ONT, MM/ML tags) | BAM file name |
-| `mod_pileup` | 5CmC sample folders, each with `mod_pileup.txt` | folder name before the CG-Align suffix |
-| `bedmethyl` | `*.bed` from `modkit pileup` | file name |
-| `shortbed` | `*_short.bed` from an earlier MethID run (`<outdir>/shortbeds`) | file name before `_short` |
+| `platform` | `start_from` | `input_dir` holds | Sample name |
+|---|---|---|---|
+| `ont` | `false` | `*.bam` with `.bai` indexes (MM/ML tags) | BAM file name |
+| `5base` | `false` | 5CmC sample folders, each with `mod_pileup.txt` | folder name before the CG-Align suffix |
+| `ont` | `bedmethyl` | `*.bed` from `modkit pileup` | file name |
+| either | `shortbed` | `*_short.bed` from an earlier MethID run (`<outdir>/shortbeds`) | file name before `_short` |
 
-**5-base / 5CmC (`mod_pileup`).** Point `input_dir` at the 5CmC project folder, for example
+**5-base / 5CmC (`platform: 5base`).** Point `input_dir` at the 5CmC project folder, for example
 `/dcs10/scharpf/data/5b-project-hub/2026-03_5-Base_Healthy_Ref`. Every
 `<sample>_bt2-bwa_umi_true_hg19_wm_idt_spike_v0.1/mod_pileup.txt` is picked up and named `<sample>`
 (`CGPLH339P_5B_lib2`). Positions where the sample's genotype isn't the reference C (`C/C` on `+`, `G/G` on `-`)
@@ -205,7 +228,7 @@ are dropped, since C>T SNPs look like methylation. The two strands are then summ
 `modkit pileup --combine-strands` does. No `ref_genome` is needed.
 
 **Sample sheet.** A tab-separated file with columns `id`, `label` and `path` (`bam_path` also works, so MethID
-1.0.2 sheets can be reused). `path` is the full path to each input of the chosen `input_file_type`. Samples are
+1.0.2 sheets can be reused). `path` is the full path to each input (a BAM for `ont`, a `mod_pileup.txt` for `5base`, or the `start_from` file). Samples are
 named `<id>_<label>`.
 
 ```
@@ -242,5 +265,5 @@ covers at least `min_cov` times, so with low-coverage cfDNA use larger panels th
 - `<outdir>/deconvolution/coverage_<date>.tsv`: per sample, CpGs in the input (`sample_sites`), CpGs used
   (`overlap_sites`) and the map or panel size (`atlas_length`).
 - `<outdir>/deconvolution/per_sample/`: the same, one file per sample.
-- `<outdir>/shortbeds/`: per-sample methylated and total read counts per CpG, reusable with `input_file_type: shortbed`.
+- `<outdir>/shortbeds/`: per-sample methylated and total read counts per CpG, reusable with `start_from: shortbed`.
 - `<outdir>/bedmethyl/`: modkit output (BAM input only).

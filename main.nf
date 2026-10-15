@@ -9,13 +9,18 @@ params.min_cov         = 2
 params.outdir          = 'results'
 params.logdir          = "${params.outdir}/logs"
 
-// Which stage to start from: 'bam', 'bedmethyl', 'shortbed', or 'mod_pileup'
-// ('mod_pileup' = 5CmC / Rastair mod_pileup.txt from Illumina 5-base or Watchmaker data)
-params.input_file_type = 'bam'
+// Sequencing platform, as in smMethID:
+//   'ont'   - ONT modBAMs (+ .bai), run through modkit pileup
+//   '5base' - 5CmC / Rastair mod_pileup.txt (Illumina 5-base or Watchmaker data)
+params.platform        = false
+// Optional: restart from an intermediate instead of the platform's raw input:
+//   'shortbed'  - <outdir>/shortbeds from an earlier run (either platform)
+//   'bedmethyl' - modkit pileup output (ont only)
+params.start_from      = false
 // Optional override for how input files are matched (defaults set per type below)
 params.input_glob      = false
 
-// Which modifications modkit counts as methylated (BAM input only):
+// Which modifications modkit counts as methylated (ont only):
 // '5mC_5hmC' combines 5mC + 5hmC to match WGBS-based maps; '5mC' counts 5mC alone
 params.mod_bases       = '5mC_5hmC'
 
@@ -28,10 +33,18 @@ params.var_atlas_file        = false
 
 // --- Input type handling ---
 
-def valid_types = ['bam', 'bedmethyl', 'shortbed', 'mod_pileup']
-if (!valid_types.contains(params.input_file_type)) {
-    exit 1, "Invalid --input_file_type '${params.input_file_type}'. Must be one of: ${valid_types.join(', ')}"
+if (!(params.platform in ['ont', '5base'])) {
+    exit 1, "Set platform to 'ont' or '5base' in params.json (--platform)"
 }
+if (params.start_from && !(params.start_from in ['shortbed', 'bedmethyl'])) {
+    exit 1, "Invalid --start_from '${params.start_from}'. Must be 'shortbed', 'bedmethyl', or false"
+}
+if (params.start_from == 'bedmethyl' && params.platform != 'ont') {
+    exit 1, "start_from 'bedmethyl' is only for platform 'ont' (modkit output)"
+}
+
+// What the input files are: the platform's raw input, unless restarting from an intermediate
+def input_type = params.start_from ?: (params.platform == 'ont' ? 'bam' : 'mod_pileup')
 
 def valid_mod_bases = ['5mC_5hmC', '5mC']
 if (!valid_mod_bases.contains(params.mod_bases)) {
@@ -46,7 +59,7 @@ def default_globs = [
     // 5CmC writes one <sample>...__5cmc-vX/ directory per sample, each with a mod_pileup.txt
     mod_pileup: '*/mod_pileup.txt'
 ]
-def input_glob = params.input_glob ?: default_globs[params.input_file_type]
+def input_glob = params.input_glob ?: default_globs[input_type]
 
 // Create necessary directories
 new File(params.outdir).mkdirs()
@@ -59,9 +72,11 @@ def summary = """
          Atlas Map       : ${params.methid_map}
          Sample Sheet    : ${params.sample_sheet}
          Input Dir       : ${params.input_dir}
-         Input File Type : ${params.input_file_type}
+         Platform        : ${params.platform}
+         Start From      : ${params.start_from ?: '(raw input)'}
+         Input Type      : ${input_type}
          Input Pattern   : ${params.sample_sheet ? '(from sample sheet)' : input_glob}
-         Mod Bases       : ${params.input_file_type == 'bam' ? params.mod_bases : '(n/a)'}
+         Mod Bases       : ${input_type == 'bam' ? params.mod_bases : '(n/a)'}
          Ref Genome      : ${params.ref_genome}
          Output Dir      : ${params.outdir}
          Min Coverage    : ${params.min_cov}
@@ -81,24 +96,24 @@ if (!(params.marker_ranking in ['gap', 'standardized'])) { exit 1, "marker_ranki
 if (params.marker_ranking == 'standardized' && params.markers_per_cell_type && !params.var_atlas_file) {
     exit 1, "marker_ranking 'standardized' needs var_atlas_file (atlas_beta_binomial_var.tsv from build_atlas.nf)"
 }
-if (params.input_file_type == 'bam' && !params.ref_genome) {
-    exit 1, "Reference genome not specified! --ref_genome <file> (required when --input_file_type bam)"
+if (input_type == 'bam' && !params.ref_genome) {
+    exit 1, "Reference genome not specified! --ref_genome <file> (required for platform 'ont')"
 }
 
 
 // --- Build the input channel according to the input file type ---
 
 // Derive a sample id from an input file name when no sample sheet is given
-def sampleIdFromFile(f, input_file_type) {
+def sampleIdFromFile(f, input_type) {
     def sample_id = f.baseName
     // Strip the _short suffix so sample ids match those produced from BAM input
-    if (input_file_type == 'shortbed') {
+    if (input_type == 'shortbed') {
         sample_id = sample_id.replaceAll(/_short$/, '')
     }
     // 5CmC files are all named mod_pileup.txt, so take the sample id from the parent
     // directory and drop the 5CmC and CG-Align suffixes
     // (e.g. SampleABC_bt2-bwa_umi_true_hg19_wm_idt_spike_v1.0__5cmc-v1.1/mod_pileup.txt -> SampleABC)
-    if (input_file_type == 'mod_pileup') {
+    if (input_type == 'mod_pileup') {
         def base = f.name == 'mod_pileup.txt' ? f.parent.name : f.name.replaceAll(/_?mod_pileup\.txt$/, '')
         sample_id = base
             .replaceAll(/__5cmc.*$/, '')
@@ -133,12 +148,12 @@ if (params.sample_sheet) {
 
     Channel
         .fromPath("${params.input_dir}/${input_glob}", checkIfExists: true)
-        .map { f -> [ sampleIdFromFile(f, params.input_file_type), f ] }
+        .map { f -> [ sampleIdFromFile(f, input_type), f ] }
         .set { sample_files_ch }
 }
 
 // BAMs travel with their index
-if (params.input_file_type == 'bam') {
+if (input_type == 'bam') {
     sample_files_ch
         .map { sample_id, bam ->
             def bai = file("${bam}.bai")
@@ -284,7 +299,7 @@ workflow {
     map_ch = file(params.methid_map)   // value channel, reused for every sample
 
     // Stage 1: Run modkit on every input BAM (skipped unless input is BAM)
-    if (params.input_file_type == 'bam') {
+    if (input_type == 'bam') {
         MODKIT_PILEUP(input_ch)
         bedmethyl_ch = MODKIT_PILEUP.out
     }
@@ -293,10 +308,10 @@ workflow {
     }
 
     // Stage 2: Convert bedmethyl files to shortbed format (skipped if input is already shortbed)
-    if (params.input_file_type == 'shortbed') {
+    if (input_type == 'shortbed') {
         shortbed_ch = input_ch
     }
-    else if (params.input_file_type == 'mod_pileup') {
+    else if (input_type == 'mod_pileup') {
         MOD_PILEUP_TO_SHORTBED(input_ch)
         shortbed_ch = MOD_PILEUP_TO_SHORTBED.out
     }

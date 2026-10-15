@@ -78,14 +78,20 @@ if (n_input_modes > 1) { exit 1, "Pass only one of sources, --config, or --mappe
 def input_dirs = []
 def config_abs_path = null   // resolved absolute --config path, if that mode is used (see note above)
 if (params.mapped_bed_dirs) {
-    input_dirs = params.mapped_bed_dirs.split(',').collect { it.trim() }
+    // absolute, so they still resolve inside the task's work directory
+    input_dirs = params.mapped_bed_dirs.split(',').collect { file(it.trim()).toAbsolutePath().toString() }
     input_dirs.each { d ->
         if (!file(d).isDirectory()) { exit 1, "--mapped_bed_dirs entry is not a directory: ${d}" }
     }
 } else if (params.sources) {
     if (!(params.sources instanceof Map)) { exit 1, "sources must be a JSON object: { \"<source>\": { \"base_dir\": \"...\", \"cell_types\": [...] } }" }
+    // base_dir made absolute, so a path relative to the run directory still resolves inside the task
+    def sources_abs = params.sources.collectEntries { src, cfg ->
+        if (!(cfg instanceof Map) || !cfg.base_dir) { exit 1, "sources: '${src}' needs a base_dir" }
+        [ (src): cfg + [ base_dir: file(cfg.base_dir).toAbsolutePath().toString() ] ]
+    }
     def sources_file = file("${params.outdir}/atlas_sources.json").toAbsolutePath()
-    sources_file.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(params.sources))
+    sources_file.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(sources_abs))
     config_abs_path = sources_file.toString()
 } else {
     if (!file(params.config).exists()) { exit 1, "--config file not found: ${params.config}" }

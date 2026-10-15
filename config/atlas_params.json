@@ -16,7 +16,7 @@
     "bed_subdir": "bed_hg19",
     "samples_to_exclude": false,
 
-    "outdir": "/path/to/results_atlas",
+    "outdir": "results_atlas",
     "min_coverage": 10,
     "cpus": 4,
 
