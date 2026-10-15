@@ -21,8 +21,15 @@ p <- add_argument(p, "--output_dir", type = "character", default = ".", help = "
 p <- add_argument(p, "--threads", type = "integer", default = 1, help = "Number of threads for data.table")
 p <- add_argument(p, "--allow_feature_overlap", type = "logical", default = TRUE, help = "If FALSE, do not allow features to overlap in the atlas")
 p <- add_argument(p, "--min_cov", type = "integer", default = 2, help = "Minimum coverage for a site to be considered [2]")
+p <- add_argument(p, "--markers_per_cell_type", type = "integer", default = 0, help = "Keep, for every cell type, the N atlas CpGs where it differs most from its closest other cell type (either direction), so each cell type is represented equally; 0 = all atlas CpGs [0]")
+p <- add_argument(p, "--marker_ranking", type = "character", default = "gap", help = "How --markers_per_cell_type ranks CpGs: gap (difference to the closest other cell type) or standardized (that difference divided by the combined replicate SD of the two cell types, from --var_atlas_file) [gap]")
+p <- add_argument(p, "--var_atlas_file", type = "character", default = NA, help = "fit_atlas_beta_binomial.r's <prefix>_var.tsv; needed for --marker_ranking standardized")
+p <- add_argument(p, "--marker_var_floor", type = "double", default = 0.0025, help = "Standardized ranking: minimum variance per cell type (0.0025 = SD 0.05) [0.0025]")
+p <- add_argument(p, "--beta_eps", type = "double", default = 0.01, help = "Atlas betas are clipped to [eps, 1-eps] when ranking markers, as in smMethID [0.01]")
 
 args <- parse_args(p)
+if (!args$marker_ranking %in% c("gap", "standardized")) stop("--marker_ranking must be gap or standardized")
+if (args$marker_ranking == "standardized" && args$markers_per_cell_type > 0 && is.na(args$var_atlas_file)) stop("--marker_ranking standardized needs --var_atlas_file")
 map_file <- args$map_file
 sample_file <- args$shortbed
 sample_name <- args$sample_name
@@ -40,6 +47,51 @@ dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
 
 #Read and convert atlas to GRanges
 atlases <- fread(map_file, data.table = FALSE)
+
+# Balanced marker selection, same as smMethID's deconvolve_em.r: for each cell type, how far
+# it stands apart from its closest other cell type at every CpG (in either direction); the top
+# N per cell type are kept and pooled, so a distinctive cell type can't dominate the fit through
+# sheer numbers of CpGs. gap: the difference in beta. standardized: each difference divided by
+# the combined replicate SD of the two cell types, so a large difference counts only if
+# replicates agree. Ranking uses betas clipped to [eps, 1-eps]; the fit uses the original betas.
+if (args$markers_per_cell_type > 0) {
+  cell_types <- setdiff(colnames(atlases), c("chr", "start", "end"))
+  atlases <- atlases[rowSums(is.na(atlases[, cell_types, drop = FALSE])) == 0, ]
+  eps <- args$beta_eps
+  clipped <- lapply(atlases[, cell_types, drop = FALSE], function(x) pmin(pmax(x, eps), 1 - eps))
+
+  vdt <- NULL
+  if (args$marker_ranking == "standardized") {
+    var_atlas <- fread(args$var_atlas_file, data.table = FALSE)
+    row_idx <- match(paste(atlases$chr, atlases$start), paste(var_atlas$chr, var_atlas$start))
+    # no variance estimate: treat as maximally uncertain
+    vdt <- lapply(setNames(cell_types, cell_types), function(ct) { v <- var_atlas[[ct]][row_idx]; v[is.na(v)] <- 0.25; v })
+    rm(var_atlas)
+  }
+
+  marker_score <- function(k) {
+    score <- NULL
+    for (j in setdiff(cell_types, k)) {
+      d <- abs(clipped[[k]] - clipped[[j]])
+      if (!is.null(vdt)) d <- d / sqrt(pmax(vdt[[k]], args$marker_var_floor) + pmax(vdt[[j]], args$marker_var_floor))
+      score <- if (is.null(score)) d else pmin(score, d)
+    }
+    score
+  }
+
+  keep <- rep(FALSE, nrow(atlases))
+  for (k in cell_types) {
+    gap <- marker_score(k)
+    top <- order(gap, decreasing = TRUE, method = "radix")[seq_len(min(args$markers_per_cell_type, length(gap)))]
+    keep[top] <- TRUE
+    message(sprintf("Markers for %s: %d, weakest %s to nearest other cell type %.3f",
+                    k, length(top), args$marker_ranking, gap[top[length(top)]]))
+  }
+  message(sprintf("Balanced markers: %d atlas CpGs kept of %d", sum(keep), nrow(atlases)))
+  atlases <- atlases[keep, ]
+  rm(clipped, vdt)
+}
+
 atlas_granges <- makeGRangesFromDataFrame(atlases, seqnames.field = "chr", start.field = "start", end.field = "end")
 
 # Read sample file and convert to GRanges

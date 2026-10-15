@@ -3,5 +3,7 @@
     "input_file_type": "mod_pileup",
     "input_dir": "path/to/5CmC/output",
     "outdir": "results_dir",
-    "min_cov": 2
+    "min_cov": 2,
+    "markers_per_cell_type": 0,
+    "marker_ranking": "gap"
 }

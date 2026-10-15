@@ -1,15 +1,10 @@
 #!/usr/bin/env nextflow
 
 // Atlas construction pipeline -- separate entrypoint from main.nf, since
-// this builds the reference atlas (bin/build_atlas.r, bin/
-// marker_selection_fstat.py) rather than deconvolving samples against one.
+// this builds the reference atlas rather than deconvolving samples against one.
 //
-// Extended per the unified single-molecule EM framework spec (layer A,
-// Build Item 1a) with a beta-binomial hyperparameter fit and lineage
-// clustering on top of the original coverage-weighted pooled atlas --
-// both new stages run by default; --run_beta_binomial_fit/
-// --run_gss_marker_selection/--run_lineage_clustering false turns any of
-// them off individually if you only want the original atlas.tsv.
+// Three stages: pool replicates into atlas.tsv, fit the beta-binomial
+// (mean + variance per CpG), then separability + marker balance.
 //
 // NOTE on --mapped_bed_dirs: bin/build_atlas.r derives each cell type's
 // label from its INPUT DIRECTORY's own path structure (the 2nd/3rd-to-last
@@ -21,8 +16,15 @@
 // directly off the shared filesystem, the same way main.nf already reads
 // params.ref_genome inline rather than staging it.
 
-params.mapped_bed_dirs   = false   // comma-separated list of per-cell-type mapped.bed directories
+params.mapped_bed_dirs   = false   // comma-separated list of per-cell-type mapped.bed directories. Mutually exclusive with --config.
+params.config            = false   // JSON manifest: { "<source>": { "base_dir": "...", "cell_types": ["...", ...] } } --
+                                    // bin/build_atlas.r has supported this alternative to --mapped_bed_dirs since it was
+                                    // written (expects <base_dir>/<cell_type>/<bed_subdir> per source/cell_type), but this
+                                    // Nextflow wrapper never actually wired it through until now. Mutually exclusive with
+                                    // --mapped_bed_dirs.
+params.bed_subdir        = false   // only used with --config; overrides bin/build_atlas.r's own "bed_hg19" default if set
 params.samples_to_exclude = false  // optional comma-separated sample (bed file) names to exclude
+<<<<<<< HEAD
 params.summarize_method  = 'pooled_counts'  // 'pooled_counts' (recommended), 'mean', or 'median' -- see bin/build_atlas.r
 params.min_coverage      = 10
 // Changed from the original false default: the beta-binomial fit below
@@ -31,34 +33,21 @@ params.min_coverage      = 10
 // downstream stage that needs it (beta-binomial fit AND F-stat/GSS marker
 // selection) and just want the original pooled atlas.tsv.
 params.get_raw_atlas     = true
+=======
+params.min_coverage      = 1
+>>>>>>> 96053d0b95b798260e6b399258f93b9e86044f1f
 params.output_name       = 'atlas.tsv'
 params.cpus              = 4
 params.outdir            = 'results_atlas'
 
-// Stage 2: beta-binomial hyperparameter fit (layer A)
-params.run_beta_binomial_fit    = true
+// Stage 2: beta-binomial fit
 params.bb_min_df_for_dispersion = 30
 params.bb_min_phi               = 1e-4
 params.bb_max_phi               = 0.999
 
-// Stage 3: GSS marker selection (doc 10), now also the input to lineage
-// clustering's marker-restricted distance metric (layer B's repurposing)
-params.run_gss_marker_selection = true
-params.gss_min_gss              = 0.3
-params.gss_n_markers_per_celltype = 50
-params.gss_secondary_test_alpha = 0.05
-params.gss_require_secondary_pass = false
-
-// Stage 4: pairwise separability + lineage clustering (Build Item 1a)
-params.run_lineage_clustering = true
-params.n_lineages           = false  // exactly one of n_lineages / lineage_cut_height required if run_lineage_clustering
-params.lineage_cut_height   = false
-
-// Legacy: F-statistic marker selection on the raw atlas, kept for
-// side-by-side comparison against GSS, not run by default
-params.run_marker_selection_fstat = false
-params.manifest                    = false  // TSV: group(cell type), sample column name in the raw atlas
-params.marker_selection_name       = 'atlas_fstats.tsv'
+// Separability is also recomputed on balanced marker sets (as main.nf's
+// markers_per_cell_type would select): comma-separated N values, '' to skip
+params.separability_marker_sets  = '5000,20000'
 
 new File(params.outdir).mkdirs()
 
@@ -66,69 +55,77 @@ def summary = """
          A T L A S   C O N S T R U C T I O N
          ====================================
          Mapped bed dirs         : ${params.mapped_bed_dirs}
-         Summarize method        : ${params.summarize_method}
+         Config                  : ${params.config}
          Min coverage            : ${params.min_coverage}
-         Get raw atlas           : ${params.get_raw_atlas}
          Output dir              : ${params.outdir}
-         Run beta-binomial fit   : ${params.run_beta_binomial_fit}
-         Run GSS marker selection: ${params.run_gss_marker_selection}
-         Run lineage clustering  : ${params.run_lineage_clustering}
-         N lineages / cut height : ${params.n_lineages} / ${params.lineage_cut_height}
-         Run legacy F-stat markers: ${params.run_marker_selection_fstat}
          """
 log.info summary
 new File("${params.outdir}/manifest.txt").write(summary)
 
 // Input validation
-if (!params.mapped_bed_dirs) { exit 1, "Provide --mapped_bed_dirs (comma-separated list of per-cell-type mapped.bed directories)" }
-if ((params.run_marker_selection_fstat || params.run_beta_binomial_fit || params.run_gss_marker_selection) && !params.get_raw_atlas) {
-    exit 1, "--run_marker_selection_fstat/--run_beta_binomial_fit/--run_gss_marker_selection need per-sample raw beta/counts, not just the pooled atlas -- pass --get_raw_atlas true (the default) or disable all three"
-}
-if (params.run_marker_selection_fstat && !params.manifest) { exit 1, "--run_marker_selection_fstat requires --manifest" }
-if (params.run_lineage_clustering) {
-    if (!params.n_lineages && !params.lineage_cut_height) {
-        exit 1, "--run_lineage_clustering requires exactly one of --n_lineages / --lineage_cut_height"
-    }
-    if (params.n_lineages && params.lineage_cut_height) {
-        exit 1, "Pass at most one of --n_lineages / --lineage_cut_height, not both"
-    }
-}
+if (!params.mapped_bed_dirs && !params.config) { exit 1, "Provide either --mapped_bed_dirs (comma-separated list of per-cell-type mapped.bed directories) or --config (a JSON source/cell_type manifest)" }
+if (params.mapped_bed_dirs && params.config) { exit 1, "Pass either --mapped_bed_dirs or --config, not both." }
 
-def input_dirs = params.mapped_bed_dirs.split(',').collect { it.trim() }
-input_dirs.each { d ->
-    if (!file(d).isDirectory()) { exit 1, "--mapped_bed_dirs entry is not a directory: ${d}" }
+// Two mutually-exclusive input modes: --mapped_bed_dirs resolves to a plain
+// list of directories at the Nextflow level (validated here); --config just
+// gets handed to bin/build_atlas.r as-is, which resolves <base_dir>/
+// <cell_type>/<bed_subdir> itself -- Nextflow doesn't need to know the
+// individual directory paths in that mode at all.
+//
+// Both modes are threaded through as plain val() strings, read directly off
+// the shared filesystem inside the task rather than staged in (see the
+// --mapped_bed_dirs note at the top of this file) -- which means both need
+// to be ABSOLUTE paths: a relative --config path resolves against whatever
+// directory `nextflow run` was launched from, not the task's own isolated
+// work directory, so a relative path silently fails to be found once inside
+// the task ("--config file not found") even though it exists right where
+// the user typed it. Resolving here, once, up front, means the user doesn't
+// have to remember to always pass --config as an absolute path themselves.
+def input_dirs = []
+def config_abs_path = null   // resolved absolute --config path, if that mode is used (see note above)
+if (params.mapped_bed_dirs) {
+    input_dirs = params.mapped_bed_dirs.split(',').collect { it.trim() }
+    input_dirs.each { d ->
+        if (!file(d).isDirectory()) { exit 1, "--mapped_bed_dirs entry is not a directory: ${d}" }
+    }
+} else {
+    if (!file(params.config).exists()) { exit 1, "--config file not found: ${params.config}" }
+    // NOTE: reassigning params.config directly here is silently a no-op --
+    // Nextflow DSL2 warns "params.config is defined multiple times --
+    // Assignments following the first are ignored" and keeps the original
+    // (possibly relative) value. A separate local variable is required.
+    config_abs_path = file(params.config).toAbsolutePath().toString()
 }
 
 // --- Processes ---
 
 process BUILD_ATLAS {
-    tag "Build atlas from ${input_dirs.size()} cell-type director(ies)"
+    tag params.config ? "Build atlas from --config ${params.config}" : "Build atlas from ${input_dirs.size()} cell-type director(ies)"
     publishDir params.outdir, mode: 'copy'
     cpus params.cpus
 
     input:
-    val(dirs)
+    val(dirs)        // used in --mapped_bed_dirs mode; empty list in --config mode
+    val(config_path)  // used in --config mode; the string 'NO_CONFIG' in --mapped_bed_dirs mode
 
     output:
     path("atlas.tsv"),              emit: atlas
     path("atlas_coverage.tsv"),     emit: coverage
-    path("atlas_raw.tsv"),          optional: true, emit: raw_atlas
-    path("atlas_raw_counts.tsv"),   optional: true, emit: raw_counts
+    path("atlas_raw_counts"),       emit: raw_counts
 
     script:
-    def dirs_arg = dirs.collect { "\"${it}\"" }.join(' ')
     def exclude_arg = params.samples_to_exclude
         ? "--samples_to_exclude " + params.samples_to_exclude.split(',').collect { "\"${it.trim()}\"" }.join(' ')
         : ''
-    def raw_arg = params.get_raw_atlas ? "--get_raw_atlas TRUE" : ""
+    def input_arg = config_path != 'NO_CONFIG'
+        ? "--config \"${config_path}\"" + (params.bed_subdir ? " --bed_subdir \"${params.bed_subdir}\"" : "")
+        : "--input_dirs " + dirs.collect { "\"${it}\"" }.join(' ')
     """
     Rscript ${baseDir}/bin/build_atlas.r \\
-        --input_dirs ${dirs_arg} \\
+        ${input_arg} \\
         --output_file "atlas.tsv" \\
-        --summarize_method "${params.summarize_method}" \\
         --min_coverage "${params.min_coverage}" \\
         --cpus "${task.cpus}" \\
-        ${raw_arg} \\
         ${exclude_arg}
     """
 }
@@ -150,7 +147,7 @@ process ATLAS_BETA_BINOMIAL_FIT {
     """
     Rscript ${baseDir}/bin/fit_atlas_beta_binomial.r \\
         --atlas_file "${atlas}" \\
-        --raw_counts_file "${raw_counts}" \\
+        --raw_counts_dir "${raw_counts}" \\
         --output_prefix "atlas_beta_binomial" \\
         --min_coverage "${params.min_coverage}" \\
         --min_df_for_dispersion "${params.bb_min_df_for_dispersion}" \\
@@ -159,197 +156,33 @@ process ATLAS_BETA_BINOMIAL_FIT {
     """
 }
 
-process GSS_MARKER_SELECTION {
-    tag "GSS marker selection"
-    publishDir params.outdir, mode: 'copy'
-
-    input:
-    path(atlas)      // the POOLED per-cell-type atlas (one column per cell type) --
-                      // NOT the raw per-replicate atlas, which has one column per
-                      // (cell_type, sample) and would make every replicate look like
-                      // its own "cell type" to this script
-    path(coverage)
-
-    output:
-    path("gss_markers.tsv"),         emit: markers
-    path("gss_markers_summary.tsv"), emit: summary
-
-    script:
-    def secondary_flag = params.gss_require_secondary_pass ? "--require_secondary_pass" : ""
-    """
-    Rscript ${baseDir}/bin/marker_selection_gss.r \\
-        --map_file "${atlas}" \\
-        --coverage_file "${coverage}" \\
-        --min_gss "${params.gss_min_gss}" \\
-        --n_markers_per_celltype "${params.gss_n_markers_per_celltype}" \\
-        --secondary_test_alpha "${params.gss_secondary_test_alpha}" \\
-        --output_file "gss_markers.tsv" \\
-        --summary_file "gss_markers_summary.tsv" \\
-        ${secondary_flag}
-    """
-    // NOTE: run without --nn_table (stage 4 pairwise gap-filling) by
-    // design -- that table comes from ATLAS_SEPARABILITY below, which
-    // itself optionally consumes THIS process's markers for its own
-    // marker-restricted distance metric. Rather than a two-pass
-    // separability run to break that cycle, gap-filling is left as a
-    // manual follow-up (rerun this process with --nn_table pointed at
-    // atlas_nearest_neighbor.csv) for anyone who wants it.
-}
-
-process MAKE_MARKER_MAP {
-    tag "Subset atlas to GSS markers"
-    publishDir params.outdir, mode: 'copy'
-
-    input:
-    path(atlas)     // same atlas GSS selected markers on (beta-binomial mean, or pooled if that fit is off)
-    path(markers)
-
-    output:
-    path("methid_map_gss.tsv"), emit: methid_map
-
-    script:
-    """
-    Rscript ${baseDir}/bin/subset_atlas_to_markers.r \\
-        --atlas_file "${atlas}" \\
-        --marker_file "${markers}" \\
-        --output_file "methid_map_gss.tsv"
-    """
-}
-
 process ATLAS_SEPARABILITY {
-    tag "Pairwise separability + lineage clustering"
+    tag "Pairwise separability + marker balance"
     publishDir params.outdir, mode: 'copy'
 
     input:
     path(atlas)
-    path(markers)
 
     output:
-    path("atlas_pair_separability.csv"), emit: pair_table
-    path("atlas_nearest_neighbor.csv"),  emit: nn_table
-    path("atlas_confusability_map.png")
-    path("atlas_correlation_map.png")
-    path("atlas_density_pairs.png")
-    path("lineage_map.tsv"),             optional: true, emit: lineage_map
-    path("lineage_map_dendrogram.png"),  optional: true
+    path("atlas_pair_separability.csv")
+    path("atlas_marker_balance.tsv")
+    path("atlas_confusability_map*.png")
 
     script:
-    def marker_arg = params.run_gss_marker_selection ? "--marker_file \"${markers}\"" : ""
-    def lineage_args = params.run_lineage_clustering
-        ? "--lineage_map_out \"lineage_map.tsv\" " + (params.n_lineages ? "--n_lineages ${params.n_lineages}" : "--lineage_cut_height ${params.lineage_cut_height}")
-        : ""
     """
     Rscript ${baseDir}/bin/atlas_separability.r \\
         --map_file "${atlas}" \\
-        ${marker_arg} \\
         --pair_table_out "atlas_pair_separability.csv" \\
-        --nn_table_out "atlas_nearest_neighbor.csv" \\
         --confusability_output_file "atlas_confusability_map.png" \\
-        --correlation_output_file "atlas_correlation_map.png" \\
-        --density_output_file "atlas_density_pairs.png" \\
-        ${lineage_args}
-    """
-}
-
-process MARKER_SELECTION_FSTAT {
-    tag "F-statistic marker selection (legacy)"
-    publishDir params.outdir, mode: 'copy'
-    cpus params.cpus
-
-    input:
-    path(raw_atlas)
-    path(manifest)
-
-    output:
-    path("${params.marker_selection_name}")
-
-    script:
-    """
-    python3 ${baseDir}/bin/marker_selection_fstat.py \\
-        --map "${raw_atlas}" \\
-        --manifest "${manifest}" \\
-        --out_file "${params.marker_selection_name}"
-    """
-}
-
-process WRITE_ATLAS_MANIFEST {
-    tag "Write output manifest"
-    // Deliberately no publishDir/output: block -- write_output_manifest.r
-    // both reads (walks) AND writes directly into params.outdir itself
-    // (an absolute path on the shared filesystem, not the task's own work
-    // dir), since its whole job is to describe what's already sitting
-    // there. Nextflow's normal stage-locally-then-publish flow doesn't fit
-    // a process whose output IS a description of the publish directory.
-
-    input:
-    val(ready)  // dependency trigger only (a collected list from every upstream stage) -- forces
-                // this to run after everything else has published to params.outdir on disk
-
-    script:
-    """
-    Rscript ${baseDir}/bin/write_output_manifest.r \\
-        --outdir "${params.outdir}" \\
-        --output_tsv "OUTPUT_MANIFEST.tsv" \\
-        --output_md "OUTPUT_MANIFEST.md"
+        --marker_sets "${params.separability_marker_sets}"
     """
 }
 
 // --- Workflow ---
 
 workflow {
-    // Stage 1: pool per-sample meth/cov into a coverage-weighted atlas
-    // (+ the raw per-sample beta/counts every downstream stage below needs)
-    BUILD_ATLAS(input_dirs)
-
-    // Stage 2: beta-binomial hyperparameter fit (layer A)
-    def mean_atlas_ch
-    def bb_signal
-    if (params.run_beta_binomial_fit) {
-        ATLAS_BETA_BINOMIAL_FIT(BUILD_ATLAS.out.atlas, BUILD_ATLAS.out.raw_counts)
-        mean_atlas_ch = ATLAS_BETA_BINOMIAL_FIT.out.mean_atlas
-        bb_signal = ATLAS_BETA_BINOMIAL_FIT.out.dispersion
-    } else {
-        mean_atlas_ch = BUILD_ATLAS.out.atlas
-        bb_signal = Channel.value('beta_binomial_fit_skipped')
-    }
-
-    // Stage 3: GSS marker selection -- when skipped, ATLAS_SEPARABILITY
-    // still needs SOME file staged for its (mandatory) markers input; a
-    // named empty placeholder, same pattern main.nf already uses for
-    // NO_SPIKE_IN, and the process script omits --marker_file whenever
-    // this placeholder is what got passed.
-    def markers_ch
-    def gss_signal
-    if (params.run_gss_marker_selection) {
-        GSS_MARKER_SELECTION(mean_atlas_ch, BUILD_ATLAS.out.coverage)
-        markers_ch = GSS_MARKER_SELECTION.out.markers
-        // MethID: turn the markers into a map main.nf can use directly
-        MAKE_MARKER_MAP(mean_atlas_ch, markers_ch)
-        gss_signal = GSS_MARKER_SELECTION.out.summary.mix(MAKE_MARKER_MAP.out.methid_map)
-    } else {
-        def no_markers = file("${params.outdir}/NO_MARKER_FILE")
-        no_markers.text = ''
-        markers_ch = Channel.value(no_markers)
-        gss_signal = Channel.value('gss_marker_selection_skipped')
-    }
-
-    // Stage 4: pairwise separability + lineage clustering (Build Item 1a),
-    // on the beta-binomial mean atlas (falls back to the plain pooled
-    // atlas if stage 2 was disabled) restricted to GSS markers (falls
-    // back to every complete-row CpG if stage 3 was disabled)
-    ATLAS_SEPARABILITY(mean_atlas_ch, markers_ch)
-
-    // Legacy: F-statistic marker selection, off by default
-    def fstat_signal
-    if (params.run_marker_selection_fstat) {
-        MARKER_SELECTION_FSTAT(BUILD_ATLAS.out.raw_atlas, file(params.manifest))
-        fstat_signal = MARKER_SELECTION_FSTAT.out
-    } else {
-        fstat_signal = Channel.value('fstat_marker_selection_skipped')
-    }
-
-    ready_ch = Channel.empty().mix(
-        BUILD_ATLAS.out.atlas, bb_signal, gss_signal, ATLAS_SEPARABILITY.out.pair_table, fstat_signal
-    ).collect()
-    WRITE_ATLAS_MANIFEST(ready_ch)
+    def config_path_val = config_abs_path ?: 'NO_CONFIG'
+    BUILD_ATLAS(input_dirs, config_path_val)
+    ATLAS_BETA_BINOMIAL_FIT(BUILD_ATLAS.out.atlas, BUILD_ATLAS.out.raw_counts)
+    ATLAS_SEPARABILITY(ATLAS_BETA_BINOMIAL_FIT.out.mean_atlas)
 }
