@@ -13,6 +13,53 @@ It runs as two Nextflow pipelines on a SLURM cluster, each with one params file 
 
 Step 1 is optional. `Orjuela2026.tsv.gz`, the hg19 map used for figure 5C in Orjuela et al. 2026, works as is.
 
+```mermaid
+flowchart TD
+    subgraph BUILD["Step 1: build_atlas.nf"]
+        direction TB
+        REF[/"Reference WGBS beds<br/>sources: base_dir / cell_type / bed_hg19"/]
+        POOL["BUILD_ATLAS<br/>pool replicates per cell type"]
+        BB["ATLAS_BETA_BINOMIAL_FIT<br/>mean + variance per CpG"]
+        SEP["ATLAS_SEPARABILITY<br/>how confusable each pair of cell types is"]
+        ATLAS[("atlas.tsv")]
+        MEAN[("atlas_beta_binomial_mean.tsv")]
+        VAR[("atlas_beta_binomial_var.tsv")]
+        QC[("separability heatmaps<br/>atlas_marker_balance.tsv")]
+        REF --> POOL --> ATLAS --> BB
+        BB --> MEAN
+        BB --> VAR
+        MEAN --> SEP --> QC
+    end
+
+    subgraph DECON["Step 2: main.nf"]
+        direction TB
+        BAM[/"bam: ONT modBAMs"/]
+        BEDM[/"bedmethyl: modkit output"/]
+        PILE[/"mod_pileup: 5CmC 5-base"/]
+        SHORTIN[/"shortbed: earlier run"/]
+        MODKIT["MODKIT_PILEUP<br/>mod_bases: 5mC_5hmC or 5mC"]
+        B2S["BEDMETHYL_TO_SHORTBED"]
+        P2S["MOD_PILEUP_TO_SHORTBED<br/>drop SNPs, merge strands"]
+        SHORT[("per-sample shortbed<br/>chr start end n_meth n_cov")]
+        DEC["DECONVOLVE, one task per sample<br/>CpGs with at least min_cov reads<br/>optional balanced marker selection<br/>non-negative least squares"]
+        COMB["COMBINE"]
+        OUT[("deconvolved_samples.csv<br/>coverage table")]
+        BAM --> MODKIT --> B2S
+        BEDM --> B2S
+        B2S --> SHORT
+        PILE --> P2S --> SHORT
+        SHORTIN --> SHORT
+        SHORT --> DEC --> COMB --> OUT
+    end
+
+    ORJ[("Orjuela2026.tsv.gz<br/>bundled hg19 map")]
+    ATLAS -. "methid_map" .-> DEC
+    MEAN -. "methid_map" .-> DEC
+    ORJ -. "methid_map" .-> DEC
+    VAR -. "var_atlas_file<br/>standardized ranking" .-> DEC
+    QC -. "choose<br/>markers_per_cell_type" .-> DEC
+```
+
 ```
 MethID/
 ├── build_atlas.nf            # pipeline: build a reference map
