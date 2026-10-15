@@ -106,7 +106,7 @@ fits a beta-binomial model, and measures how separable the cell types are.
 | `bed_subdir` | `bed_hg19` | Folder under each cell type holding its beds (`chr start end meth cov`). |
 | `samples_to_exclude` | `false` | Comma-separated bed file names to leave out. |
 | `outdir` | `results_atlas` | Output folder. |
-| `min_coverage` | `1` | Minimum pooled reads for a CpG to be reported. Use 10 or more if you plan to use `standardized` marker ranking. |
+| `min_coverage` | `10` | Minimum pooled reads for a CpG to be reported. Keep it at 10 or more for `standardized` marker ranking. |
 | `cpus` | `4` | CPUs for pooling. |
 | `bb_min_df_for_dispersion`, `bb_min_phi`, `bb_max_phi` | `30`, `0.0001`, `0.999` | Beta-binomial fit settings. |
 | `separability_marker_sets` | `5000,20000` | Panel sizes (markers per cell type) to also compute separability for; `""` to skip. |

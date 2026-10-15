@@ -17,7 +17,7 @@
     "samples_to_exclude": false,
 
     "outdir": "/path/to/results_atlas",
-    "min_coverage": 1,
+    "min_coverage": 10,
     "cpus": 4,
 
     "bb_min_df_for_dispersion": 30,

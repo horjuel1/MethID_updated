@@ -27,7 +27,7 @@ params.sources           = false   // the same { "<source>": { "base_dir": ..., 
                                     // <outdir>/atlas_sources.json and used like --config.
 params.bed_subdir        = false   // only used with --config / sources; overrides bin/build_atlas.r's own "bed_hg19" default if set
 params.samples_to_exclude = false  // optional comma-separated sample (bed file) names to exclude
-params.min_coverage      = 1
+params.min_coverage      = 10
 params.output_name       = 'atlas.tsv'
 params.cpus              = 4
 params.outdir            = 'results_atlas'
