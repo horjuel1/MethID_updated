@@ -71,7 +71,7 @@ MethID/
 ├── config/
 │   ├── params.json                  # template: settings for main.nf
 │   ├── atlas_params.json            # template: settings for build_atlas.nf
-│   └── sample_sheet.example.tsv     # template: optional sample sheet
+│   └── sample_sheet.example.csv     # template: optional sample sheet
 └── launch/
     ├── launch.sh                    # sbatch launcher for main.nf
     └── launch_build_atlas.sh        # sbatch launcher for build_atlas.nf
@@ -202,7 +202,7 @@ Outputs in `outdir`:
 | `platform` | — | `ont` (ONT modBAMs) or `5base` (5CmC output). Required. |
 | `start_from` | `false` | Restart from an intermediate instead of the platform's raw input: `shortbed` (either platform) or `bedmethyl` (`ont` only). |
 | `input_dir` | — | Folder with the inputs. Use this or `sample_sheet`. |
-| `sample_sheet` | `false` | TSV listing the inputs (see below). Use this or `input_dir`. |
+| `sample_sheet` | `false` | CSV listing the inputs (see below). Use this or `input_dir`. |
 | `ref_genome` | — | Reference FASTA. `ont` only. |
 | `mod_bases` | `5mC_5hmC` | `ont` only. `5mC_5hmC` counts 5mC and 5hmC together as methylated, matching WGBS-based maps; `5mC` counts 5mC alone. |
 | `markers_per_cell_type` | `0` | Marker selection (see below). `0` uses every CpG in the map. |
@@ -227,14 +227,18 @@ Outputs in `outdir`:
 are dropped, since C>T SNPs look like methylation. The two strands are then summed per CpG, as
 `modkit pileup --combine-strands` does. No `ref_genome` is needed.
 
-**Sample sheet.** A tab-separated file with columns `id`, `label` and `path` (`bam_path` also works, so MethID
-1.0.2 sheets can be reused). `path` is the full path to each input (a BAM for `ont`, a `mod_pileup.txt` for `5base`, or the `start_from` file). Samples are
-named `<id>_<label>`.
+**Sample sheet.** Same format as smMethID: a CSV (tab-separated if the file ends in `.tsv` or `.txt`) with a
+`CGID` column, which names each sample, and one path column that depends on the input:
+
+| Input | Path column | Points to |
+|---|---|---|
+| `platform: 5base` | `sample_dir` | the 5CmC sample folder (holding `mod_pileup.txt`) |
+| `platform: ont` | `bam_path` | the BAM (with its `.bai` next to it) |
+| `start_from: shortbed` / `bedmethyl` | `path` | the shortbed or bedmethyl file |
 
 ```
-id	label	path
-CGPLH339P	lib2	/dcs10/.../CGPLH339P_5B_lib2_bt2-bwa_umi_true_hg19_wm_idt_spike_v0.1/mod_pileup.txt
-P001	baseline	/abs/path/P001.bam
+CGID,sample_dir
+CGPLH339P,/dcs10/scharpf/data/5b-project-hub/2026-03_5-Base_Healthy_Ref/CGPLH339P_5B_lib2_bt2-bwa_umi_true_hg19_wm_idt_spike_v0.1
 ```
 
 ### Marker selection

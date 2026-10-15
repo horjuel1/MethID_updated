@@ -125,21 +125,27 @@ def sampleIdFromFile(f, input_type) {
 
 if (params.sample_sheet) {
 
-    // Sample sheet (TSV) with 'id', 'label', and the input file path in a 'path' column
-    // ('bam_path' is also accepted). Samples are named <id>_<label>.
+    // Sample sheet, as in smMethID: CSV (or TSV if named .tsv/.txt) with a CGID column and a path
+    // column that depends on the input: bam_path (ont), sample_dir (5base: the 5CmC sample folder
+    // holding mod_pileup.txt), or path (start_from: the shortbed / bedmethyl file). Samples are named by CGID.
+    def path_col = params.start_from ? 'path' : (params.platform == 'ont' ? 'bam_path' : 'sample_dir')
+    def sep = params.sample_sheet.toString().toLowerCase() =~ /\.(tsv|txt)$/ ? '\t' : ','
     Channel
         .fromPath(params.sample_sheet, checkIfExists: true)
-        .splitCsv(header: true, sep: '\t')
+        .splitCsv(header: true, sep: sep)
         .map { row ->
-            def input_path = row.path ?: row.bam_path
-            if (!row.id || !row.label || !input_path) {
-                exit 1, "Sample sheet must contain 'id', 'label', and 'path' (or 'bam_path') columns. Found: ${row.keySet().join(', ')}"
+            if (!row.containsKey('CGID') || !row.containsKey(path_col)) {
+                exit 1, "Sample sheet ${params.sample_sheet} needs columns CGID and ${path_col}. Columns present: ${row.keySet().join(', ')}"
             }
-            def f = file(input_path)
+            def sample_id = row.CGID.trim().replaceAll("[ /]", "_")
+            def f = file(row[path_col].trim())
+            if (input_type == 'mod_pileup') {
+                if (!f.isDirectory()) { exit 1, "5CmC sample dir not found for ${sample_id}: ${f}" }
+                f = f.resolve('mod_pileup.txt')
+            }
             if (!f.exists()) {
-                exit 1, "Input file not found for sample ${row.id}: ${input_path}"
+                exit 1, "Input file not found for sample ${sample_id}: ${f}"
             }
-            def sample_id = "${row.id}_${row.label}".replaceAll("[ /]", "_")
             return [ sample_id, f ]
         }
         .set { sample_files_ch }
