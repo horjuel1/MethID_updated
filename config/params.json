@@ -4,13 +4,13 @@
     "platform": "5base",
     "start_from": false,
     "input_dir": "/dcs10/scharpf/data/5b-project-hub/2026-03_5-Base_Healthy_Ref",
-    "sample_sheet": false,
+    "sample_sheet": "sample_sheet.csv",
 
-    "ref_genome": false,
+    "ref_genome": "/dcl01/scharpf/data/pipeline-hub/pipeline-resources/bwa/hg19_wm_idt_spike/hg19_wm_idt_spike.fa",
     "mod_bases": "5mC_5hmC",
 
-    "markers_per_cell_type": 0,
-    "marker_ranking": "gap",
+    "markers_per_cell_type": 5000,
+    "marker_ranking": "standard",
     "var_atlas_file": false,
 
     "outdir": "results",
