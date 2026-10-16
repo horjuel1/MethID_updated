@@ -65,13 +65,15 @@ MethID/
 ├── main.nf                          # pipeline: deconvolve samples
 ├── build_atlas.nf                   # pipeline: build a reference map
 ├── nextflow.config                  # SLURM resources and the container
+├── methid.sif                       # the container (you add it; git ignores it)
 ├── Dockerfile                       # container recipe
 ├── Orjuela2026.tsv.gz               # bundled hg19 reference map
 ├── bin/                             # R scripts the pipelines call
 ├── config/
 │   ├── params.json                  # template: settings for main.nf
 │   ├── atlas_params.json            # template: settings for build_atlas.nf
-│   └── sample_sheet.example.csv     # template: optional sample sheet
+│   ├── sample_sheet.example.csv     # template: optional sample sheet
+│   └── metadata_sheet.example.csv   # template: optional metadata for the summaries
 └── launch/
     ├── launch.sh                    # sbatch launcher for main.nf
     └── launch_build_atlas.sh        # sbatch launcher for build_atlas.nf
@@ -113,13 +115,15 @@ or copy `methid.tar` to the cluster and run `singularity build methid.sif docker
 
 ### 3. Place the container
 
-`nextflow.config` expects `methid.sif` in the folder above the repo. To keep it elsewhere, change `container`
-in `nextflow.config` to its full path.
+Put `methid.sif` in the repo folder. Git ignores `*.sif`, so `git pull` leaves it alone. `nextflow.config` looks
+for it there first, then in the folder above the repo. To keep it anywhere else, set `container` in
+`nextflow.config` to its full path.
 
 ```
-parent-directory/
+MethID_updated/
 ├── methid.sif
-└── MethID_updated/
+├── main.nf
+└── ...
 ```
 
 Check it:
@@ -203,6 +207,7 @@ Outputs in `outdir`:
 | `start_from` | `false` | Restart from an intermediate instead of the platform's raw input: `shortbed` (either platform) or `bedmethyl` (`ont` only). |
 | `input_dir` | — | Folder with the inputs. Use this or `sample_sheet`. |
 | `sample_sheet` | `false` | CSV listing the inputs (see below). Use this or `input_dir`. |
+| `metadata_sheet` | `false` | Optional CSV adding `label` and `exposure` to each sample; turns on the summaries (see below). |
 | `ref_genome` | — | Reference FASTA. `ont` only. |
 | `mod_bases` | `5mC_5hmC` | `ont` only. `5mC_5hmC` counts 5mC and 5hmC together as methylated, matching WGBS-based maps; `5mC` counts 5mC alone. |
 | `markers_per_cell_type` | `0` | Marker selection (see below). `0` uses every CpG in the map. |
@@ -263,6 +268,31 @@ For the same map and settings, the selected CpGs are identical to smMethID's. Me
 covers at least `min_cov` times, so with low-coverage cfDNA use larger panels than smMethID needs, and check
 `overlap_sites` in the coverage table.
 
+### Summaries by label and exposure (optional)
+
+Set `metadata_sheet` to a CSV (tab-separated if named `.tsv` or `.txt`) with the sample sheet's columns plus
+`label` and `exposure`. You can use your sample sheet with the two columns added:
+
+```
+CGID,sample_dir,label,exposure
+CGPLH339P,/dcs10/.../CGPLH339P_5B_lib2_bt2-bwa_umi_true_hg19_wm_idt_spike_v0.1,healthy,unexposed
+```
+
+Samples are matched by `CGID` to the sample names in `deconvolved_samples.csv`. With a sample sheet those are the
+`CGID`s; with `input_dir` they are the names derived from the files, such as `CGPLH339P_5B_lib2`. Empty `label`
+or `exposure` values are grouped as `NA`. The columns are checked when the run starts. Samples that don't match
+are left out of the summaries and listed in `summary_unmatched_samples.csv`.
+
+Written to `<outdir>/summary/`:
+
+- `summary_by_label.csv`: per label and cell type, the number of samples and the mean, SD, median, 25th and 75th
+  percentiles, minimum and maximum percentage.
+- `summary_by_label_exposure.csv`: the same per label, exposure and cell type.
+- `summary_sample_counts.csv`: samples per label and exposure.
+- `deconvolved_samples_with_metadata.csv`: every sample's percentages with its label and exposure, one row per
+  sample and cell type, for your own plots and tests.
+- `summary_unmatched_samples.csv`: samples that were deconvolved but not in the metadata sheet, or the reverse.
+
 ### Outputs
 
 - `<outdir>/deconvolution/deconvolved_samples.csv`: cell-type percentages, one column per sample.
@@ -270,4 +300,5 @@ covers at least `min_cov` times, so with low-coverage cfDNA use larger panels th
   (`overlap_sites`) and the map or panel size (`atlas_length`).
 - `<outdir>/deconvolution/per_sample/`: the same, one file per sample.
 - `<outdir>/shortbeds/`: per-sample methylated and total read counts per CpG, reusable with `start_from: shortbed`.
-- `<outdir>/bedmethyl/`: modkit output (BAM input only).
+- `<outdir>/bedmethyl/`: modkit output (`ont` only).
+- `<outdir>/summary/`: summaries by label and exposure (with `metadata_sheet` only).

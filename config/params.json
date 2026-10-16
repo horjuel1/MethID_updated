@@ -5,6 +5,7 @@
     "start_from": false,
     "input_dir": "/dcs10/scharpf/data/5b-project-hub/2026-03_5-Base_Healthy_Ref",
     "sample_sheet": "sample_sheet.csv",
+    "metadata_sheet": false,
 
     "ref_genome": "/dcl01/scharpf/data/pipeline-hub/pipeline-resources/bwa/hg19_wm_idt_spike/hg19_wm_idt_spike.fa",
     "mod_bases": "5mC_5hmC",

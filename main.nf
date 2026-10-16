@@ -31,6 +31,10 @@ params.markers_per_cell_type = 0
 params.marker_ranking        = 'gap'
 params.var_atlas_file        = false
 
+// Optional metadata sheet (CSV, or TSV if named .tsv/.txt): the sample sheet's columns plus 'label' and
+// 'exposure'. When given, results are also summarized per cell type by label and by label x exposure.
+params.metadata_sheet  = false
+
 // --- Input type handling ---
 
 if (!(params.platform in ['ont', '5base'])) {
@@ -82,12 +86,24 @@ def summary = """
          Min Coverage    : ${params.min_cov}
          Markers/cell type: ${params.markers_per_cell_type ?: 'all CpGs'}
          Marker ranking  : ${params.marker_ranking}
+         Metadata Sheet  : ${params.metadata_sheet}
          """
 log.info summary
 new File("${params.outdir}/manifest.txt").write(summary)
 
 // Input Validation
 if (!params.methid_map) { exit 1, "Methylation ID map not specified! --methid_map <file>" }
+// Check the metadata sheet up front, so a typo doesn't surface only after every sample is deconvolved
+if (params.metadata_sheet) {
+    def metadata_file = file(params.metadata_sheet)
+    if (!metadata_file.exists()) { exit 1, "Metadata sheet not found: ${params.metadata_sheet}" }
+    def metadata_sep = metadata_file.name.toLowerCase() =~ /\.(tsv|txt)$/ ? '\t' : ','
+    def metadata_header = metadata_file.readLines()[0].split(metadata_sep).collect { it.trim().replaceAll(/^"|"$/, '') }
+    def metadata_missing = ['CGID', 'label', 'exposure'].findAll { !(it in metadata_header) }
+    if (metadata_missing) {
+        exit 1, "Metadata sheet ${params.metadata_sheet} needs columns CGID, label and exposure. Missing: ${metadata_missing.join(', ')}"
+    }
+}
 if (!params.input_dir && !params.sample_sheet) {
     exit 1, "No inputs specified! Use --input_dir <dir> or --sample_sheet <file>"
 }
@@ -285,7 +301,7 @@ process COMBINE {
     path(map_file)
 
     output:
-    path("deconvolved_samples.csv")
+    path("deconvolved_samples.csv"), emit: deconv
     path("coverage_*.tsv")
     path("manifest_*.txt")
 
@@ -296,6 +312,27 @@ process COMBINE {
         --input_dir "." \\
         --output_dir "." \\
         --map_file "${map_file}"
+    """
+}
+
+process SUMMARIZE {
+    tag "Summarize by label and exposure"
+    publishDir "${params.outdir}/summary", mode: 'copy'
+
+    input:
+    path(deconv_file)
+    path(metadata_file)
+
+    output:
+    path("summary_*.csv")
+    path("deconvolved_samples_with_metadata.csv")
+
+    script:
+    """
+    Rscript ${baseDir}/bin/summarize.r \\
+        --deconv_file "${deconv_file}" \\
+        --metadata_file "${metadata_file}" \\
+        --output_dir "."
     """
 }
 
@@ -335,4 +372,9 @@ workflow {
         DECONVOLVE.out.cov.collect(),
         map_ch
     )
+
+    // Stage 5 (optional): summarize by label and by label x exposure
+    if (params.metadata_sheet) {
+        SUMMARIZE(COMBINE.out.deconv, file(params.metadata_sheet))
+    }
 }
