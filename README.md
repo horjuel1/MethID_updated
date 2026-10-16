@@ -65,6 +65,7 @@ MethID/
 ├── main.nf                          # pipeline: deconvolve samples
 ├── build_atlas.nf                   # pipeline: build a reference map
 ├── nextflow.config                  # SLURM resources and the container
+├── methid.sif                       # the container (you add it; git ignores it)
 ├── Dockerfile                       # container recipe
 ├── Orjuela2026.tsv.gz               # bundled hg19 reference map
 ├── bin/                             # R scripts the pipelines call
@@ -114,13 +115,15 @@ or copy `methid.tar` to the cluster and run `singularity build methid.sif docker
 
 ### 3. Place the container
 
-`nextflow.config` expects `methid.sif` in the folder above the repo. To keep it elsewhere, change `container`
-in `nextflow.config` to its full path.
+Put `methid.sif` in the repo folder. Git ignores `*.sif`, so `git pull` leaves it alone. `nextflow.config` looks
+for it there first, then in the folder above the repo. To keep it anywhere else, set `container` in
+`nextflow.config` to its full path.
 
 ```
-parent-directory/
+MethID_updated/
 ├── methid.sif
-└── MethID_updated/
+├── main.nf
+└── ...
 ```
 
 Check it:
