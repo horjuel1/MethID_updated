@@ -1,19 +1,19 @@
 {
     "methid_map": "/path/to/results_atlas/atlas_beta_binomial_mean.tsv",
 
-    "platform": "5base",
+    "platform": "ont",
     "start_from": false,
-    "input_dir": "/dcs10/scharpf/data/5b-project-hub/2026-03_5-Base_Healthy_Ref",
+    "input_dir": "/dcs10/scharpf/data/",
     "sample_sheet": "sample_sheet.csv",
     "metadata_sheet": false,
 
-    "ref_genome": "/dcl01/scharpf/data/pipeline-hub/pipeline-resources/bwa/hg19_wm_idt_spike/hg19_wm_idt_spike.fa",
+    "ref_genome": "/dcl01/scharpf/data/pipeline-hub/pipeline-resources/genome/hg19/hg19.fa",
     "mod_bases": "5mC_5hmC",
 
-    "markers_per_cell_type": 5000,
-    "marker_ranking": "standard",
+    "markers_per_cell_type": 50000,
+    "marker_ranking": "standardized",
     "var_atlas_file": false,
 
     "outdir": "results",
-    "min_cov": 2
+    "min_cov": 1
 }
