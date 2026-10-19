@@ -247,6 +247,8 @@ process MOD_PILEUP_TO_SHORTBED {
     // Drop rows where the sample genotype isn't the reference C (C/C on +, G/G on -), since
     // C>T SNPs look like methylation calls, then shift '-' rows back 1bp and sum both strands
     // to match `modkit pileup --cpg --combine-strands`. Output: chr start end n_mod n_valid.
+    // sort -T . keeps sort's temporary files in the task's work directory: the cluster's TMPDIR
+    // may not be writable inside the container.
     script:
     """
     awk 'BEGIN { FS = OFS = "\\t" }
@@ -259,7 +261,7 @@ process MOD_PILEUP_TO_SHORTBED {
          }
          END { for (k in mod) if (cov[k] > 0) { split(k, a, OFS); print a[1], a[2], a[2] + 1, mod[k], cov[k] } }' \\
       "${pileup_file}" \\
-      | sort -k1,1 -k2,2n > "${sample_id}_short.bed"
+      | sort -T . -k1,1 -k2,2n > "${sample_id}_short.bed"
     """
 }
 
